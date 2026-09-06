@@ -4,7 +4,7 @@
  *
  * Repo IA (6 groups + Settings pinned last):
  *   Overview · Docs · Architecture · Knowledge Graph · Code Health ·
- *   People & History · Chat
+ *   People & History · Tutor · Chat
  */
 
 import {
@@ -16,6 +16,7 @@ import {
   FolderTree,
   GitCommitHorizontal,
   GitMerge,
+  GraduationCap,
   HeartPulse,
   LayoutDashboard,
   Layers,
@@ -79,7 +80,10 @@ export function repoNavGroups(repoId: string): NavGroup[] {
       ],
     },
     {
-      items: [{ label: "Chat", href: `${base}/chat`, icon: MessageSquare }],
+      items: [
+        { label: "Tutor", href: `${base}/chat/tutor`, icon: GraduationCap },
+        { label: "Chat", href: `${base}/chat`, icon: MessageSquare, exact: true },
+      ],
     },
     {
       label: "Settings",
