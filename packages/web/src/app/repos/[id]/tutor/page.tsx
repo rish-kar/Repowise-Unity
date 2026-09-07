@@ -76,7 +76,6 @@ export default async function RepoTutorPage({ params }: Props) {
   );
 
   const curriculum = buildTutorCurriculum({
-    repoId: id,
     repoName: repo.name,
     defaultBranch: repo.default_branch,
     ...(repo.head_commit ? { headCommit: repo.head_commit } : {}),
