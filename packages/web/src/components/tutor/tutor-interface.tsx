@@ -4,219 +4,125 @@ import Link from "next/link";
 import {
   BookOpen,
   Check,
+  ChevronLeft,
   ChevronRight,
+  ExternalLink,
   GraduationCap,
   RotateCcw,
+  ShieldCheck,
 } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import useSWR from "swr";
-import type { ChatUIMessage } from "@repowise-dev/types/chat";
-import { ChatComposer } from "@repowise-dev/ui/chat/chat-composer";
-import { ChatMessage } from "@repowise-dev/ui/chat/chat-message";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@repowise-dev/ui/ui";
 import { cn } from "@repowise-dev/ui/lib/cn";
-import { getProviders } from "@/lib/api/providers";
-import { getRepoStats } from "@/lib/api/repos";
-import { pageHref } from "@/lib/utils/page-href";
-import { ModelSelector } from "@/components/chat/model-selector";
-import { useRepositoryChat } from "@/components/chat/repository-chat-provider";
-import {
-  TUTOR_LESSONS,
-  TUTOR_LEVELS,
-  buildTutorMessage,
-  extractTutorQuestion,
-  type TutorLevel,
-} from "./tutor-prompt";
+import type { TutorCurriculum } from "./tutor-curriculum";
 
 interface TutorInterfaceProps {
   repoId: string;
-  repoName: string;
-  defaultBranch?: string;
-  headCommit?: string;
+  curriculum: TutorCurriculum;
 }
 
 const MICRO_LABEL =
   "font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]";
 
-function storageKey(repoId: string, suffix: string) {
-  return `repowise:tutor:${repoId}:${suffix}`;
+function progressKey(repoId: string) {
+  return `repowise:tutor:${repoId}:completed-v2`;
 }
 
-export function TutorInterface({
-  repoId,
-  repoName,
-  defaultBranch,
-  headCommit,
-}: TutorInterfaceProps) {
-  const {
-    messages,
-    isStreaming,
-    error,
-    sendMessage,
-    cancel,
-    reset,
-    selectedProvider,
-    selectedModel,
-    selectModel,
-  } = useRepositoryChat();
+function selectedKey(repoId: string) {
+  return `repowise:tutor:${repoId}:selected-v2`;
+}
 
-  const [level, setLevel] = useState<TutorLevel>("beginner");
-  const [selectedLessonId, setSelectedLessonId] = useState(TUTOR_LESSONS[0]!.id);
+export function TutorInterface({ repoId, curriculum }: TutorInterfaceProps) {
   const [completed, setCompleted] = useState<string[]>([]);
-  const [draft, setDraft] = useState("");
-  const didReset = useRef(false);
-  const transcriptEndRef = useRef<HTMLDivElement>(null);
-
-  const { data: providers } = useSWR(
-    `providers:${repoId}`,
-    () => getProviders(repoId),
-    { revalidateOnFocus: false },
-  );
-  const { data: stats } = useSWR(
-    `repo-stats:${repoId}`,
-    () => getRepoStats(repoId),
-    { revalidateOnFocus: false },
-  );
-
-  const anyConfigured =
-    providers === undefined || providers.providers.some((provider) => provider.configured);
+  const [selectedId, setSelectedId] = useState(curriculum.lessons[0]?.id ?? "");
+  const [answerVisible, setAnswerVisible] = useState(false);
 
   useEffect(() => {
-    if (didReset.current) return;
-    didReset.current = true;
-    reset();
-
     try {
-      const storedLevel = window.localStorage.getItem(storageKey(repoId, "level"));
-      if (
-        storedLevel === "beginner" ||
-        storedLevel === "intermediate" ||
-        storedLevel === "advanced"
-      ) {
-        setLevel(storedLevel);
-      }
-
-      const storedCompleted = JSON.parse(
-        window.localStorage.getItem(storageKey(repoId, "completed")) ?? "[]",
-      ) as unknown;
-      if (Array.isArray(storedCompleted)) {
-        setCompleted(
-          storedCompleted.filter(
+      const stored = JSON.parse(window.localStorage.getItem(progressKey(repoId)) ?? "[]") as unknown;
+      const valid = Array.isArray(stored)
+        ? stored.filter(
             (value): value is string =>
-              typeof value === "string" &&
-              TUTOR_LESSONS.some((lesson) => lesson.id === value),
-          ),
-        );
+              typeof value === "string" && curriculum.lessons.some((lesson) => lesson.id === value),
+          )
+        : [];
+      setCompleted(valid);
+
+      const savedSelected = window.localStorage.getItem(selectedKey(repoId));
+      if (savedSelected && curriculum.lessons.some((lesson) => lesson.id === savedSelected)) {
+        setSelectedId(savedSelected);
+      } else {
+        const firstIncomplete = curriculum.lessons.find((lesson) => !valid.includes(lesson.id));
+        if (firstIncomplete) setSelectedId(firstIncomplete.id);
       }
     } catch {
-      // Local progress is a convenience only; Tutor works without storage.
+      // Progress persistence is optional; the deterministic lessons still work.
     }
-  }, [repoId, reset]);
+  }, [curriculum.lessons, repoId]);
 
-  useEffect(() => {
-    if (messages.length === 0) return;
-    transcriptEndRef.current?.scrollIntoView({ block: "end" });
-  }, [messages.length, isStreaming]);
+  const selectedIndex = Math.max(
+    0,
+    curriculum.lessons.findIndex((lesson) => lesson.id === selectedId),
+  );
+  const selectedLesson = curriculum.lessons[selectedIndex] ?? curriculum.lessons[0];
+  const progressPct = curriculum.lessons.length
+    ? Math.round((completed.length / curriculum.lessons.length) * 100)
+    : 0;
 
-  const selectedLesson =
-    TUTOR_LESSONS.find((lesson) => lesson.id === selectedLessonId) ?? TUTOR_LESSONS[0]!;
-
-  const displayMessages = useMemo<ChatUIMessage[]>(
-    () =>
-      messages.map((message) =>
-        message.role === "user"
-          ? { ...message, text: extractTutorQuestion(message.text) }
-          : message,
-      ),
-    [messages],
+  const totalMinutes = useMemo(
+    () => curriculum.lessons.reduce((sum, lesson) => sum + lesson.estimatedMinutes, 0),
+    [curriculum.lessons],
   );
 
-  const setTutorLevel = useCallback(
-    (next: TutorLevel) => {
-      setLevel(next);
+  const selectLesson = useCallback(
+    (lessonId: string) => {
+      setSelectedId(lessonId);
+      setAnswerVisible(false);
       try {
-        window.localStorage.setItem(storageKey(repoId, "level"), next);
+        window.localStorage.setItem(selectedKey(repoId), lessonId);
       } catch {}
     },
     [repoId],
   );
 
-  const toggleLessonComplete = useCallback(
-    (lessonId: string) => {
-      setCompleted((current) => {
-        const next = current.includes(lessonId)
-          ? current.filter((id) => id !== lessonId)
-          : [...current, lessonId];
-        try {
-          window.localStorage.setItem(
-            storageKey(repoId, "completed"),
-            JSON.stringify(next),
-          );
-        } catch {}
-        return next;
-      });
+  const persistCompleted = useCallback(
+    (next: string[]) => {
+      setCompleted(next);
+      try {
+        window.localStorage.setItem(progressKey(repoId), JSON.stringify(next));
+      } catch {}
     },
     [repoId],
   );
 
-  const sendTutorMessage = useCallback(
-    async (question: string) => {
-      const text = question.trim();
-      if (!text || isStreaming || !anyConfigured) return;
+  const markComplete = useCallback(() => {
+    if (!selectedLesson) return;
+    const next = completed.includes(selectedLesson.id)
+      ? completed
+      : [...completed, selectedLesson.id];
+    persistCompleted(next);
+  }, [completed, persistCompleted, selectedLesson]);
 
-      const wrapped = buildTutorMessage({
-        question: text,
-        level,
-        lesson: selectedLesson,
-        repoName,
-      });
+  const completeAndContinue = useCallback(() => {
+    if (!selectedLesson) return;
+    markComplete();
+    const nextLesson = curriculum.lessons[selectedIndex + 1];
+    if (nextLesson) selectLesson(nextLesson.id);
+  }, [curriculum.lessons, markComplete, selectLesson, selectedIndex, selectedLesson]);
 
-      await sendMessage(wrapped, {
-        context: { kind: "chat", label: "Tutor" },
-        ...(selectedProvider ? { provider: selectedProvider } : {}),
-        ...(selectedModel ? { model: selectedModel } : {}),
-      });
-    },
-    [
-      anyConfigured,
-      isStreaming,
-      level,
-      repoName,
-      selectedLesson,
-      selectedModel,
-      selectedProvider,
-      sendMessage,
-    ],
-  );
+  const resetProgress = useCallback(() => {
+    persistCompleted([]);
+    const first = curriculum.lessons[0];
+    if (first) selectLesson(first.id);
+  }, [curriculum.lessons, persistCompleted, selectLesson]);
 
-  const startLesson = useCallback(() => {
-    void sendTutorMessage(selectedLesson.starter);
-  }, [selectedLesson, sendTutorMessage]);
-
-  const startNewSession = useCallback(() => {
-    cancel();
-    reset();
-    setDraft("");
-  }, [cancel, reset]);
-
-  const progressPct = Math.round((completed.length / TUTOR_LESSONS.length) * 100);
-  const status = [
-    stats ? `${stats.file_count.toLocaleString()} files` : null,
-    stats && stats.symbol_count > 0
-      ? `${stats.symbol_count.toLocaleString()} symbols`
-      : null,
-    stats ? `${Math.round(stats.doc_coverage_pct)}% documented` : null,
-    defaultBranch,
-    headCommit ? headCommit.slice(0, 7) : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  if (!selectedLesson) {
+    return (
+      <div className="p-[var(--page-pad)] text-sm text-[var(--color-text-secondary)]">
+        Tutor could not build a learning path from the current index. Re-index the repository and try again.
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full min-h-0 bg-[var(--color-bg-root)]">
@@ -227,11 +133,9 @@ export function TutorInterface({
               <GraduationCap className="h-4 w-4" />
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-[var(--color-text-primary)]">
-                Tutor
-              </p>
+              <p className="text-sm font-semibold text-[var(--color-text-primary)]">Tutor</p>
               <p className="truncate text-xs text-[var(--color-text-tertiary)]">
-                {repoName}
+                {curriculum.repoName}
               </p>
             </div>
           </div>
@@ -240,7 +144,7 @@ export function TutorInterface({
             <div className="flex items-center justify-between gap-3">
               <span className={MICRO_LABEL}>Progress</span>
               <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
-                {completed.length}/{TUTOR_LESSONS.length}
+                {completed.length}/{curriculum.lessons.length}
               </span>
             </div>
             <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--color-bg-inset)]">
@@ -252,41 +156,17 @@ export function TutorInterface({
           </div>
         </div>
 
-        <div className="border-b border-[var(--color-border-default)] p-4">
-          <p className={cn(MICRO_LABEL, "mb-2")}>Depth</p>
-          <div className="grid grid-cols-3 gap-1 rounded-md bg-[var(--color-bg-inset)] p-1">
-            {TUTOR_LEVELS.map((item) => {
-              const active = item.id === level;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setTutorLevel(item.id)}
-                  className={cn(
-                    "rounded px-2 py-1.5 text-[11px] transition-colors",
-                    active
-                      ? "bg-[var(--color-bg-elevated)] font-medium text-[var(--color-text-primary)] shadow-sm"
-                      : "text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]",
-                  )}
-                >
-                  {item.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <nav className="min-h-0 flex-1 overflow-y-auto p-3" aria-label="Tutor lessons">
-          <p className={cn(MICRO_LABEL, "mb-2 px-2")}>Learning path</p>
+        <nav className="min-h-0 flex-1 overflow-y-auto p-3" aria-label="Tutor learning path">
+          <p className={cn(MICRO_LABEL, "mb-2 px-2")}>System-led path</p>
           <div className="space-y-1">
-            {TUTOR_LESSONS.map((lesson) => {
+            {curriculum.lessons.map((lesson, index) => {
               const active = lesson.id === selectedLesson.id;
               const done = completed.includes(lesson.id);
               return (
                 <button
                   key={lesson.id}
                   type="button"
-                  onClick={() => setSelectedLessonId(lesson.id)}
+                  onClick={() => selectLesson(lesson.id)}
                   className={cn(
                     "group flex w-full items-start gap-3 rounded-md px-2.5 py-2.5 text-left transition-colors",
                     active
@@ -296,7 +176,7 @@ export function TutorInterface({
                 >
                   <span
                     className={cn(
-                      "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border",
+                      "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-medium",
                       done
                         ? "border-[var(--color-accent-primary)] bg-[var(--color-accent-primary)] text-[var(--color-bg-root)]"
                         : active
@@ -304,21 +184,14 @@ export function TutorInterface({
                           : "border-[var(--color-border-default)] text-[var(--color-text-tertiary)]",
                     )}
                   >
-                    {done ? (
-                      <Check className="h-3 w-3" />
-                    ) : (
-                      <span className="h-1.5 w-1.5 rounded-full bg-current" />
-                    )}
+                    {done ? <Check className="h-3 w-3" /> : index + 1}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm font-medium">{lesson.title}</span>
                     <span className="mt-0.5 block text-[11px] text-[var(--color-text-tertiary)]">
-                      {lesson.eyebrow}
+                      ~{lesson.estimatedMinutes} min
                     </span>
                   </span>
-                  {active && (
-                    <ChevronRight className="mt-1 h-3.5 w-3.5 shrink-0 text-[var(--color-text-tertiary)]" />
-                  )}
                 </button>
               );
             })}
@@ -326,77 +199,44 @@ export function TutorInterface({
         </nav>
 
         <div className="border-t border-[var(--color-border-default)] p-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-full justify-start gap-2 text-xs"
-            onClick={startNewSession}
-          >
+          <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-xs" onClick={resetProgress}>
             <RotateCcw className="h-3.5 w-3.5" />
-            New tutor session
+            Reset learning progress
           </Button>
         </div>
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col">
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <div className="shrink-0 border-b border-[var(--color-border-default)] bg-[var(--color-bg-surface)] px-[var(--page-pad)] py-3">
-          <div className="mx-auto flex w-full max-w-4xl items-center justify-between gap-4">
+          <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <BookOpen className="h-3.5 w-3.5 shrink-0 text-[var(--color-accent-primary)]" />
                 <p className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-                  {selectedLesson.title}
+                  {selectedLesson.eyebrow} · {selectedLesson.title}
                 </p>
               </div>
               <p className="mt-0.5 truncate text-xs text-[var(--color-text-tertiary)]">
-                {selectedLesson.description}
+                {curriculum.status.join(" · ")}
               </p>
             </div>
-
-            <button
-              type="button"
-              onClick={() => toggleLessonComplete(selectedLesson.id)}
-              className={cn(
-                "hidden shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition-colors sm:flex",
-                completed.includes(selectedLesson.id)
-                  ? "border-[var(--color-accent-primary)] bg-[var(--color-bg-elevated)] text-[var(--color-accent-primary)]"
-                  : "border-[var(--color-border-default)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-hover)] hover:text-[var(--color-text-primary)]",
-              )}
-            >
-              <Check className="h-3.5 w-3.5" />
-              {completed.includes(selectedLesson.id) ? "Completed" : "Mark complete"}
-            </button>
+            <div className="hidden items-center gap-2 rounded-md border border-[var(--color-border-default)] bg-[var(--color-bg-elevated)] px-2.5 py-1.5 text-xs text-[var(--color-text-secondary)] sm:flex">
+              <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-accent-primary)]" />
+              No AI required
+            </div>
           </div>
 
-          <div className="mx-auto mt-3 grid w-full max-w-4xl grid-cols-2 gap-2 lg:hidden">
-            <label className="sr-only" htmlFor="tutor-mobile-lesson">
-              Tutor lesson
-            </label>
+          <div className="mx-auto mt-3 w-full max-w-5xl lg:hidden">
+            <label className="sr-only" htmlFor="tutor-mobile-lesson">Tutor lesson</label>
             <select
               id="tutor-mobile-lesson"
               value={selectedLesson.id}
-              onChange={(event) => setSelectedLessonId(event.target.value)}
-              className="min-w-0 rounded-md border border-[var(--color-border-default)] bg-[var(--color-bg-elevated)] px-2.5 py-2 text-xs text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent-primary)]"
+              onChange={(event) => selectLesson(event.target.value)}
+              className="w-full rounded-md border border-[var(--color-border-default)] bg-[var(--color-bg-elevated)] px-2.5 py-2 text-xs text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent-primary)]"
             >
-              {TUTOR_LESSONS.map((lesson) => (
+              {curriculum.lessons.map((lesson, index) => (
                 <option key={lesson.id} value={lesson.id}>
-                  {lesson.title}
-                </option>
-              ))}
-            </select>
-
-            <label className="sr-only" htmlFor="tutor-mobile-level">
-              Tutor depth
-            </label>
-            <select
-              id="tutor-mobile-level"
-              value={level}
-              onChange={(event) => setTutorLevel(event.target.value as TutorLevel)}
-              className="min-w-0 rounded-md border border-[var(--color-border-default)] bg-[var(--color-bg-elevated)] px-2.5 py-2 text-xs text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent-primary)]"
-            >
-              {TUTOR_LEVELS.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.label}
+                  {index + 1}. {lesson.title}
                 </option>
               ))}
             </select>
@@ -404,132 +244,158 @@ export function TutorInterface({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          {displayMessages.length === 0 ? (
-            <div className="mx-auto flex w-full max-w-4xl flex-col gap-9 px-[var(--page-pad)] py-10 sm:py-14">
-              <div className="max-w-2xl">
-                <div className="mb-5 flex h-10 w-10 items-center justify-center rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] text-[var(--color-accent-primary)]">
-                  <GraduationCap className="h-5 w-5" />
-                </div>
-                <p className={cn(MICRO_LABEL, "mb-2")}>RepoWise Tutor</p>
-                <h1 className="text-[24px] font-semibold leading-tight text-[var(--color-text-primary)] sm:text-[28px]">
-                  Learn {repoName} one layer at a time
-                </h1>
-                <p className="mt-3 max-w-xl text-[15px] leading-7 text-[var(--color-text-secondary)]">
-                  Tutor uses the same RepoWise index, knowledge graph, documentation,
-                  Git history, and code-search tools as Chat, but explains the evidence
-                  as a guided lesson for your experience level.
-                </p>
-                {status && (
-                  <p className="mt-4 font-mono text-xs tabular-nums text-[var(--color-text-tertiary)]">
-                    {status}
-                  </p>
-                )}
-              </div>
-
-              <section className="max-w-2xl">
-                <p className={cn(MICRO_LABEL, "mb-2")}>{selectedLesson.eyebrow}</p>
-                <div className="border-y border-[var(--color-border-default)] py-5">
-                  <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">
-                    {selectedLesson.title}
-                  </h2>
-                  <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">
-                    {selectedLesson.description}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={startLesson}
-                    disabled={!anyConfigured}
-                    className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-[var(--color-accent-primary)] transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Teach me this lesson
-                    <ChevronRight className="h-4 w-4" />
-                  </button>
-                </div>
-              </section>
-
-              <section className="max-w-2xl">
-                <p className={cn(MICRO_LABEL, "mb-1")}>Or ask directly</p>
-                <ul className="border-t border-[var(--color-border-default)]">
-                  {[
-                    "Explain this repository to me like it is my first day on the team.",
-                    "Which five files should I understand first, and in what order?",
-                    "Show me one important code path and explain every hand-off.",
-                  ].map((question) => (
-                    <li key={question}>
-                      <button
-                        type="button"
-                        onClick={() => setDraft(question)}
-                        className="group flex w-full items-center gap-3 border-b border-[var(--color-border-default)] py-3 text-left text-[15px] text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)]"
-                      >
-                        <span className="min-w-0 flex-1">{question}</span>
-                        <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            </div>
-          ) : (
-            <div className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-[var(--page-pad)] py-8">
-              {displayMessages.map((message) => (
-                <ChatMessage
-                  key={message.id}
-                  message={message}
-                  repoId={repoId}
-                  buildCitationHref={(source) => pageHref(repoId, source.pageId)}
-                />
-              ))}
-              <div ref={transcriptEndRef} />
-            </div>
-          )}
-        </div>
-
-        <div className="shrink-0 border-t border-[var(--color-border-default)] bg-[var(--color-bg-root)] px-[var(--page-pad)] pb-4 pt-3">
-          <div className="mx-auto w-full max-w-4xl">
-            {!anyConfigured && (
-              <div className="mb-2 rounded-md border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] px-3 py-2 text-sm text-[var(--color-text-secondary)]">
-                Tutor uses RepoWise Chat to reason over the index. Configure a chat
-                provider in{" "}
-                <Link
-                  href="/settings"
-                  className="text-[var(--color-accent-primary)] hover:underline"
-                >
-                  Settings
-                </Link>
-                {" "}to begin.
-              </div>
-            )}
-
-            {error && (
-              <div className="mb-2 rounded-md border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] px-3 py-2 text-sm text-[var(--color-text-secondary)]">
-                {error}
-              </div>
-            )}
-
-            <ChatComposer
-              value={draft}
-              onValueChange={setDraft}
-              onSend={sendTutorMessage}
-              onCancel={cancel}
-              isStreaming={isStreaming}
-              placeholder={`Ask your ${level} tutor about ${selectedLesson.title.toLowerCase()}…`}
-              disabled={!anyConfigured}
-              autoFocus
-              footer={
-                <div className="flex items-center gap-2">
-                  <ModelSelector
-                    repoId={repoId}
-                    activeProvider={selectedProvider}
-                    activeModel={selectedModel}
-                    onSelect={selectModel}
-                  />
-                  <span className="hidden text-[11px] text-[var(--color-text-tertiary)] sm:inline">
-                    {TUTOR_LEVELS.find((item) => item.id === level)?.label} ·{" "}
-                    {selectedLesson.title}
+          <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-[var(--page-pad)] py-8 sm:py-10">
+            {selectedIndex === 0 && (
+              <section className="border-b border-[var(--color-border-default)] pb-8">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={MICRO_LABEL}>Generated from current RepoWise index</span>
+                  <span className="text-[var(--color-text-tertiary)]">·</span>
+                  <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--color-accent-primary)]">
+                    {curriculum.lessons.length} lessons · ~{totalMinutes} min
                   </span>
                 </div>
-              }
-            />
+                <h1 className="mt-3 max-w-3xl text-2xl font-semibold tracking-tight text-[var(--color-text-primary)] sm:text-3xl">
+                  Learn {curriculum.repoName} in the order the codebase suggests
+                </h1>
+                <p className="mt-3 max-w-3xl text-[15px] leading-7 text-[var(--color-text-secondary)]">
+                  {curriculum.subtitle}
+                </p>
+              </section>
+            )}
+
+            <section>
+              <p className={MICRO_LABEL}>Objective</p>
+              <h2 className="mt-2 max-w-3xl text-xl font-semibold text-[var(--color-text-primary)]">
+                {selectedLesson.objective}
+              </h2>
+              <p className="mt-2 max-w-3xl text-[15px] leading-7 text-[var(--color-text-secondary)]">
+                {selectedLesson.summary}
+              </p>
+            </section>
+
+            {selectedLesson.sections.map((section) => (
+              <section key={section.title} className="border-t border-[var(--color-border-default)] pt-6">
+                <h3 className="text-base font-semibold text-[var(--color-text-primary)]">{section.title}</h3>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--color-text-secondary)]">
+                  {section.body}
+                </p>
+
+                {section.facts && section.facts.length > 0 && (
+                  <dl className="mt-5 grid grid-cols-2 border-y border-[var(--color-border-default)] sm:grid-cols-3">
+                    {section.facts.map((fact) => (
+                      <div key={`${fact.label}:${fact.value}`} className="min-w-0 border-b border-[var(--color-border-subtle)] px-3 py-4 last:border-b-0 sm:border-b-0">
+                        <dt className={MICRO_LABEL}>{fact.label}</dt>
+                        <dd className="mt-1 truncate text-sm font-medium text-[var(--color-text-primary)]" title={fact.value}>
+                          {fact.value}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+
+                {section.items && section.items.length > 0 && (
+                  <ul className="mt-5 border-t border-[var(--color-border-default)]">
+                    {section.items.map((item, index) => {
+                      const content = (
+                        <>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-start gap-2">
+                              <span className="mt-0.5 font-mono text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
+                                {String(index + 1).padStart(2, "0")}
+                              </span>
+                              <span className="min-w-0 break-words text-sm font-medium text-[var(--color-text-primary)]">
+                                {item.title}
+                              </span>
+                            </div>
+                            {item.detail && (
+                              <p className="mt-1 pl-7 text-sm leading-6 text-[var(--color-text-secondary)]">
+                                {item.detail}
+                              </p>
+                            )}
+                            {item.meta && (
+                              <p className="mt-1 pl-7 font-mono text-[11px] text-[var(--color-text-tertiary)]">
+                                {item.meta}
+                              </p>
+                            )}
+                          </div>
+                          {item.href && <ExternalLink className="mt-1 h-3.5 w-3.5 shrink-0 text-[var(--color-text-tertiary)]" />}
+                        </>
+                      );
+
+                      return (
+                        <li key={`${item.title}:${index}`} className="border-b border-[var(--color-border-default)]">
+                          {item.href ? (
+                            <Link
+                              href={item.href}
+                              className="flex items-start gap-3 py-4 transition-colors hover:bg-[var(--color-bg-overlay)]"
+                            >
+                              {content}
+                            </Link>
+                          ) : (
+                            <div className="flex items-start gap-3 py-4">{content}</div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </section>
+            ))}
+
+            <section className="rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-5">
+              <p className={MICRO_LABEL}>Checkpoint</p>
+              <p className="mt-2 text-sm font-medium leading-6 text-[var(--color-text-primary)]">
+                {selectedLesson.checkpoint.question}
+              </p>
+              {answerVisible ? (
+                <div className="mt-4 border-l-2 border-[var(--color-accent-primary)] pl-4">
+                  <p className={MICRO_LABEL}>Answer from the index</p>
+                  <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">
+                    {selectedLesson.checkpoint.answer}
+                  </p>
+                </div>
+              ) : (
+                <Button variant="outline" size="sm" className="mt-4" onClick={() => setAnswerVisible(true)}>
+                  Reveal answer
+                </Button>
+              )}
+            </section>
+
+            <div className="flex flex-col gap-3 border-t border-[var(--color-border-default)] pt-6 sm:flex-row sm:items-center sm:justify-between">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={selectedIndex === 0}
+                onClick={() => {
+                  const previous = curriculum.lessons[selectedIndex - 1];
+                  if (previous) selectLesson(previous.id);
+                }}
+                className="gap-1.5"
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Previous
+              </Button>
+
+              <div className="flex items-center gap-2 sm:justify-end">
+                {!completed.includes(selectedLesson.id) && (
+                  <Button variant="ghost" size="sm" onClick={markComplete} className="gap-1.5">
+                    <Check className="h-4 w-4" />
+                    Mark complete
+                  </Button>
+                )}
+                {selectedIndex < curriculum.lessons.length - 1 ? (
+                  <Button size="sm" onClick={completeAndContinue} className="gap-1.5">
+                    Complete & continue
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                ) : (
+                  <Button size="sm" onClick={markComplete} className="gap-1.5">
+                    <Check className="h-4 w-4" />
+                    Finish path
+                  </Button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </main>

@@ -2,6 +2,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   overview: "Overview",
   docs: "Docs",
   chat: "Chat",
+  tutor: "Tutor",
   architecture: "Architecture",
   "code-health": "Code Health",
   coverage: "Tests",

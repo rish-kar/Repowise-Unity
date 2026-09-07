@@ -81,7 +81,7 @@ export function repoNavGroups(repoId: string): NavGroup[] {
     },
     {
       items: [
-        { label: "Tutor", href: `${base}/chat/tutor`, icon: GraduationCap },
+        { label: "Tutor", href: `${base}/tutor`, icon: GraduationCap },
         { label: "Chat", href: `${base}/chat`, icon: MessageSquare, exact: true },
       ],
     },

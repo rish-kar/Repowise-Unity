@@ -58,6 +58,7 @@ const ROUTES: Readonly<Record<string, RouteDefinition>> = {
   costs: { kind: "usage" },
   settings: { kind: "settings" },
   stats: { kind: "settings" },
+  tutor: { kind: "chat" },
   chat: { kind: "chat" },
 };
 
