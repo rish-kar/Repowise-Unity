@@ -5,7 +5,7 @@
   "description": "repowise Web UI — Next.js 15 dashboard and wiki viewer",
   "scripts": {
     "dev": "next dev --port 3000",
-    "build": "next build",
+    "build": "node scripts/build-safe.mjs",
     "start": "next start --port 3000",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
