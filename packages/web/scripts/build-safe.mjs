@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -120,16 +120,6 @@ async function replaceBuild(stagedWebDir) {
   const destinationNext = path.join(webDir, ".next");
   await rm(destinationNext, { recursive: true, force: true });
   await cp(stagedNext, destinationNext, { recursive: true, force: true });
-
-  // `repowise serve` checks this directory before trying an npm install in the
-  // source tree. The production bundle itself is self-contained under .next.
-  const markerDir = path.join(webDir, "node_modules");
-  await mkdir(markerDir, { recursive: true });
-  await writeFile(
-    path.join(markerDir, ".repowise-build-managed"),
-    "Source builds are dependency-managed in a clean staging directory.\n",
-    "utf8",
-  );
 }
 
 async function main() {
