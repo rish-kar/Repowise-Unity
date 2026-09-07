@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getRepo } from "@/lib/api/repos";
 import { getOverviewSummary } from "@/lib/api/overview";
 import { getArchitectureView } from "@/lib/api/c4";
+import { getFileContent } from "@/lib/api/files";
 import { TutorInterface } from "@/components/tutor/tutor-interface";
 import { buildTutorCurriculum } from "@/components/tutor/tutor-curriculum";
 
@@ -16,6 +17,10 @@ async function safeFetch<T>(fn: () => Promise<T>): Promise<T | null> {
   } catch {
     return null;
   }
+}
+
+function uniquePaths(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -43,6 +48,33 @@ export default async function RepoTutorPage({ params }: Props) {
     safeFetch(() => getArchitectureView(id)),
   ]);
 
+  // Tutor teaches inside its own surface. Pull a small, deterministic set of
+  // source files from the local checkout so lessons can show real excerpts
+  // rather than redirecting the learner to Files/Architecture/Docs.
+  const rankedNodes = [...(architecture?.nodes ?? [])]
+    .filter((node) => node.file_path && !node.is_test)
+    .sort((a, b) => b.pagerank - a.pagerank);
+
+  const sourcePaths = uniquePaths([
+    ...(architecture?.entry_points ?? []),
+    ...(architecture?.nodes.filter((node) => node.is_entry_point).map((node) => node.file_path) ?? []),
+    ...(architecture?.entry_candidates ?? []),
+    ...(architecture?.tour.map((step) => step.target_path) ?? []),
+    ...(overview?.onboarding_targets.map((target) => target.path) ?? []),
+    ...(overview?.top_hotspots.map((hotspot) => hotspot.file_path) ?? []),
+    ...rankedNodes.map((node) => node.file_path),
+  ]).slice(0, 12);
+
+  const sourceEntries = await Promise.all(
+    sourcePaths.map(async (path) => {
+      const content = await safeFetch(() => getFileContent(id, path));
+      return content == null ? null : ([path, content] as const);
+    }),
+  );
+  const sourceContents = Object.fromEntries(
+    sourceEntries.filter((entry): entry is readonly [string, string] => entry !== null),
+  );
+
   const curriculum = buildTutorCurriculum({
     repoId: id,
     repoName: repo.name,
@@ -50,6 +82,7 @@ export default async function RepoTutorPage({ params }: Props) {
     ...(repo.head_commit ? { headCommit: repo.head_commit } : {}),
     overview,
     architecture,
+    sourceContents,
   });
 
   return <TutorInterface repoId={id} curriculum={curriculum} />;
