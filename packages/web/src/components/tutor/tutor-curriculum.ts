@@ -1,6 +1,5 @@
 import type { OverviewSummaryResponse } from "@repowise-dev/types/overview";
-import type { ArchitectureView, ArchNode } from "@repowise-dev/ui/c4";
-import { fileEntityPath } from "@repowise-dev/ui/shared/entity";
+import type { ArchitectureView, ArchEdge, ArchLayer, ArchNode } from "@repowise-dev/ui/c4";
 
 export interface TutorFact {
   label: string;
@@ -11,7 +10,24 @@ export interface TutorItem {
   title: string;
   detail?: string;
   meta?: string;
-  href?: string;
+}
+
+export interface TutorEvidence {
+  title: string;
+  path?: string;
+  explanation: string;
+  signals: string[];
+  language?: string;
+  lineStart?: number;
+  lineEnd?: number;
+  code?: string;
+}
+
+export interface TutorFlowStep {
+  from: string;
+  to: string;
+  relation: string;
+  explanation: string;
 }
 
 export interface TutorSection {
@@ -19,11 +35,15 @@ export interface TutorSection {
   body: string;
   facts?: TutorFact[];
   items?: TutorItem[];
+  evidence?: TutorEvidence[];
+  flow?: TutorFlowStep[];
 }
 
 export interface TutorCheckpoint {
   question: string;
-  answer: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string;
 }
 
 export interface TutorLesson {
@@ -45,16 +65,12 @@ export interface TutorCurriculum {
 }
 
 interface BuildTutorCurriculumInput {
-  repoId: string;
   repoName: string;
   defaultBranch: string;
   headCommit?: string;
   overview: OverviewSummaryResponse | null;
   architecture: ArchitectureView | null;
-}
-
-function fileHref(repoId: string, path: string): string {
-  return fileEntityPath(`/repos/${repoId}`, path);
+  sourceContents: Record<string, string>;
 }
 
 function unique(values: Array<string | null | undefined>): string[] {
@@ -67,147 +83,343 @@ function findBestNodeByPath(nodes: ArchNode[], path: string): ArchNode | undefin
     .sort((a, b) => b.pagerank - a.pagerank)[0];
 }
 
+function uniqueNodesByPath(nodes: ArchNode[]): ArchNode[] {
+  const seen = new Set<string>();
+  const result: ArchNode[] = [];
+  for (const node of nodes) {
+    const key = node.file_path ?? node.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(node);
+  }
+  return result;
+}
+
 function formatHealth(value: number | null | undefined): string {
   return value == null ? "Not measured" : `${value.toFixed(1)} / 10`;
 }
 
+function edgeScore(edge: ArchEdge): number {
+  return Math.max(1, edge.weight || 1) * Math.max(0.1, edge.confidence || 0.1);
+}
+
+function excerpt(
+  sourceContents: Record<string, string>,
+  path: string | null | undefined,
+  node?: ArchNode,
+): Pick<TutorEvidence, "language" | "lineStart" | "lineEnd" | "code"> {
+  if (!path) return {};
+  const source = sourceContents[path];
+  if (!source) return {};
+
+  const lines = source.split(/\r?\n/);
+  const requestedStart = node?.line_range?.[0] ?? 1;
+  const requestedEnd = node?.line_range?.[1] ?? requestedStart + 17;
+  const start = Math.max(1, Math.min(requestedStart, Math.max(1, lines.length)));
+  const end = Math.max(start, Math.min(requestedEnd, start + 17, lines.length));
+  const code = lines.slice(start - 1, end).join("\n").trimEnd();
+
+  if (!code) return {};
+  return {
+    language: node?.language ?? undefined,
+    lineStart: start,
+    lineEnd: end,
+    code,
+  };
+}
+
+function evidenceForNode(
+  node: ArchNode,
+  sourceContents: Record<string, string>,
+  rationale: string,
+): TutorEvidence {
+  const signals = unique([
+    node.node_type,
+    node.complexity,
+    node.pagerank_percentile > 0 ? `${Math.round(node.pagerank_percentile)}th percentile centrality` : null,
+    `${node.in_degree} incoming dependencies`,
+    `${node.out_degree} outgoing dependencies`,
+    node.is_entry_point ? "entry point" : null,
+    node.is_hotspot ? "hotspot" : null,
+    node.has_doc ? "documented" : null,
+    node.primary_owner ? `owner: ${node.primary_owner}` : null,
+    ...node.tags.slice(0, 2),
+  ]);
+
+  return {
+    title: node.name || node.file_path || "Indexed node",
+    ...(node.file_path ? { path: node.file_path } : {}),
+    explanation: node.summary || rationale,
+    signals,
+    ...excerpt(sourceContents, node.file_path, node),
+  };
+}
+
+function evidenceForPath(
+  path: string,
+  nodes: ArchNode[],
+  sourceContents: Record<string, string>,
+  rationale: string,
+): TutorEvidence {
+  const node = findBestNodeByPath(nodes, path);
+  if (node) return evidenceForNode(node, sourceContents, rationale);
+  return {
+    title: path.split("/").at(-1) ?? path,
+    path,
+    explanation: rationale,
+    signals: ["indexed source file"],
+    ...excerpt(sourceContents, path),
+  };
+}
+
+function makeCheckpoint(
+  question: string,
+  correct: string,
+  distractors: string[],
+  explanation: string,
+  position = 1,
+): TutorCheckpoint {
+  const fallbacks = [
+    "Not identified by the current index",
+    "A test-only path",
+    "An external dependency",
+    "The repository default branch",
+  ];
+  const alternatives = unique([...distractors, ...fallbacks]).filter((value) => value !== correct).slice(0, 3);
+  const options = alternatives;
+  const correctIndex = Math.max(0, Math.min(position, options.length));
+  options.splice(correctIndex, 0, correct);
+  return { question, options, correctIndex, explanation };
+}
+
+function layerForNode(layers: ArchLayer[], nodeId: string): ArchLayer | undefined {
+  return layers.find((layer) => layer.node_ids.includes(nodeId));
+}
+
+function buildTrace(
+  nodes: ArchNode[],
+  edges: ArchEdge[],
+  start: ArchNode | undefined,
+): { nodes: ArchNode[]; flow: TutorFlowStep[] } {
+  if (!start) return { nodes: [], flow: [] };
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const visited = new Set<string>([start.id]);
+  const traceNodes = [start];
+  const flow: TutorFlowStep[] = [];
+  let current = start;
+
+  for (let depth = 0; depth < 4; depth += 1) {
+    const nextEdge = edges
+      .filter((edge) => edge.source === current.id && !visited.has(edge.target))
+      .filter((edge) => {
+        const target = nodeById.get(edge.target);
+        return target && !target.is_test;
+      })
+      .sort((a, b) => edgeScore(b) - edgeScore(a))[0];
+    if (!nextEdge) break;
+    const target = nodeById.get(nextEdge.target);
+    if (!target) break;
+
+    flow.push({
+      from: current.name || current.file_path || current.id,
+      to: target.name || target.file_path || target.id,
+      relation: nextEdge.edge_type,
+      explanation: `RepoWise indexed this as a ${nextEdge.direction} ${nextEdge.edge_type} relationship with weight ${Math.round(nextEdge.weight)} and ${Math.round(nextEdge.confidence * 100)}% confidence.`,
+    });
+    traceNodes.push(target);
+    visited.add(target.id);
+    current = target;
+  }
+
+  return { nodes: traceNodes, flow };
+}
+
 export function buildTutorCurriculum({
-  repoId,
   repoName,
   defaultBranch,
   headCommit,
   overview,
   architecture,
+  sourceContents,
 }: BuildTutorCurriculumInput): TutorCurriculum {
   const stats = overview?.stats;
   const languages = overview?.languages.map((item) => item.language) ?? architecture?.languages ?? [];
   const primaryLanguage = languages[0] ?? "Not identified";
   const nodes = architecture?.nodes ?? [];
+  const edges = architecture?.edges ?? [];
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const layers = [...(architecture?.layers ?? [])].sort((a, b) => a.display_order - b.display_order);
 
   const indexedEntryPoints = unique([
     ...(architecture?.entry_points ?? []),
     ...nodes.filter((node) => node.is_entry_point).map((node) => node.file_path),
     ...(architecture?.entry_candidates ?? []),
-  ]).slice(0, 6);
+  ]).slice(0, 5);
 
-  const entryItems: TutorItem[] = indexedEntryPoints.map((path) => {
-    const node = findBestNodeByPath(nodes, path);
+  const entryEvidence = indexedEntryPoints.map((path) =>
+    evidenceForPath(
+      path,
+      nodes,
+      sourceContents,
+      "RepoWise identified this file as a likely execution boundary. Read the excerpt and then follow its strongest outgoing relationships below.",
+    ),
+  );
+
+  const entryNeighborhood: TutorFlowStep[] = [];
+  for (const path of indexedEntryPoints.slice(0, 3)) {
+    const entryNode = findBestNodeByPath(nodes, path);
+    if (!entryNode) continue;
+    const strongest = edges
+      .filter((edge) => edge.source === entryNode.id)
+      .sort((a, b) => edgeScore(b) - edgeScore(a))
+      .slice(0, 2);
+    for (const edge of strongest) {
+      const target = nodeById.get(edge.target);
+      if (!target) continue;
+      entryNeighborhood.push({
+        from: entryNode.name || path,
+        to: target.name || target.file_path || target.id,
+        relation: edge.edge_type,
+        explanation: `${entryNode.name || path} reaches ${target.name || target.file_path || target.id} through an indexed ${edge.edge_type} edge. This is the first dependency to understand after the entry boundary.`,
+      });
+    }
+  }
+
+  const layerItems: TutorItem[] = layers.slice(0, 8).map((layer) => {
+    const representatives = layer.node_ids
+      .map((id) => nodeById.get(id))
+      .filter((node): node is ArchNode => Boolean(node))
+      .sort((a, b) => b.pagerank - a.pagerank)
+      .slice(0, 3)
+      .map((node) => node.file_path || node.name);
     return {
-      title: path,
-      detail: node?.summary || "RepoWise identified this as a likely place where execution enters the system.",
-      meta: [node?.language, node?.complexity, node?.is_entry_point ? "confirmed entry point" : "entry candidate"]
-        .filter(Boolean)
-        .join(" · "),
-      href: fileHref(repoId, path),
+      title: layer.name,
+      detail: layer.description || "A structural layer detected from the indexed dependency graph.",
+      meta: `${layer.file_count.toLocaleString()} files${layer.health_score == null ? "" : ` · health ${layer.health_score.toFixed(1)}/10`}${representatives.length ? ` · examples: ${representatives.join(", ")}` : ""}`,
     };
   });
 
-  const layers = [...(architecture?.layers ?? [])].sort((a, b) => a.display_order - b.display_order);
-  const layerItems: TutorItem[] = layers.slice(0, 8).map((layer) => ({
-    title: layer.name,
-    detail: layer.description || "A structural layer detected from the indexed dependency graph.",
-    meta: `${layer.file_count.toLocaleString()} files${layer.health_score == null ? "" : ` · health ${layer.health_score.toFixed(1)}/10`}`,
-    href: `/repos/${repoId}/architecture`,
-  }));
-
-  const layerByNode = new Map<string, string>();
-  for (const layer of layers) {
-    for (const nodeId of layer.node_ids) layerByNode.set(nodeId, layer.name);
+  const crossLayerFlow: TutorFlowStep[] = [];
+  const seenLayerPairs = new Set<string>();
+  for (const edge of [...edges].sort((a, b) => edgeScore(b) - edgeScore(a))) {
+    const source = nodeById.get(edge.source);
+    const target = nodeById.get(edge.target);
+    if (!source || !target) continue;
+    const sourceLayer = layerForNode(layers, source.id);
+    const targetLayer = layerForNode(layers, target.id);
+    if (!sourceLayer || !targetLayer || sourceLayer.id === targetLayer.id) continue;
+    const pair = `${sourceLayer.id}:${targetLayer.id}`;
+    if (seenLayerPairs.has(pair)) continue;
+    seenLayerPairs.add(pair);
+    crossLayerFlow.push({
+      from: `${sourceLayer.name} · ${source.name}`,
+      to: `${targetLayer.name} · ${target.name}`,
+      relation: edge.edge_type,
+      explanation: `This concrete ${edge.edge_type} edge is evidence for the ${sourceLayer.name} → ${targetLayer.name} dependency direction.`,
+    });
+    if (crossLayerFlow.length >= 6) break;
   }
-  const flows = new Map<string, { from: string; to: string; weight: number }>();
-  for (const edge of architecture?.edges ?? []) {
-    const from = layerByNode.get(edge.source);
-    const to = layerByNode.get(edge.target);
-    if (!from || !to || from === to) continue;
-    const key = `${from}\u0000${to}`;
-    const current = flows.get(key) ?? { from, to, weight: 0 };
-    current.weight += Math.max(1, edge.weight || 1);
-    flows.set(key, current);
-  }
-  const flowItems: TutorItem[] = [...flows.values()]
-    .sort((a, b) => b.weight - a.weight)
-    .slice(0, 6)
-    .map((flow) => ({
-      title: `${flow.from} → ${flow.to}`,
-      detail: "One of the strongest cross-layer dependency paths in the current index.",
-      meta: `${Math.round(flow.weight)} indexed connection weight`,
-      href: `/repos/${repoId}/architecture`,
-    }));
 
-  const curatedTour = [...(architecture?.tour ?? [])].sort((a, b) => a.order - b.order);
-  const fallbackTourPaths = unique([
-    ...indexedEntryPoints,
-    ...(overview?.onboarding_targets.map((target) => target.path) ?? []),
-  ]).slice(0, 6);
-  const tourItems: TutorItem[] = curatedTour.length
-    ? curatedTour.slice(0, 8).map((step) => ({
-        title: `${step.order}. ${step.title}`,
-        detail: step.description,
-        meta: [step.reason, step.kind || null].filter(Boolean).join(" · "),
-        ...(step.target_path ? { href: fileHref(repoId, step.target_path) } : { href: `/repos/${repoId}/architecture` }),
-      }))
-    : fallbackTourPaths.map((path, index) => ({
-        title: `${index + 1}. ${path}`,
-        detail: findBestNodeByPath(nodes, path)?.summary || "Read this after the previous step to build context in dependency order.",
-        meta: index === 0 ? "Start here" : "Continue here",
-        href: fileHref(repoId, path),
-      }));
+  const layerEvidence = uniqueNodesByPath(
+    layers.flatMap((layer) =>
+      layer.node_ids
+        .map((id) => nodeById.get(id))
+        .filter((node): node is ArchNode => Boolean(node))
+        .sort((a, b) => b.pagerank - a.pagerank)
+        .slice(0, 1),
+    ),
+  )
+    .slice(0, 5)
+    .map((node) =>
+      evidenceForNode(
+        node,
+        sourceContents,
+        `This is a representative high-centrality node for the ${layerForNode(layers, node.id)?.name ?? "detected"} layer.`,
+      ),
+    );
 
   const rankedOnboarding = [...(overview?.onboarding_targets ?? [])].sort((a, b) => b.pagerank - a.pagerank);
-  const rankedNodePaths = nodes
-    .filter((node) => node.file_path && !node.is_test)
-    .sort((a, b) => b.pagerank - a.pagerank)
-    .map((node) => node.file_path!);
+  const rankedNodes = uniqueNodesByPath(
+    nodes
+      .filter((node) => node.file_path && !node.is_test)
+      .sort((a, b) => b.pagerank - a.pagerank),
+  );
   const importantPaths = unique([
     ...rankedOnboarding.map((target) => target.path),
-    ...rankedNodePaths,
-  ]).slice(0, 7);
-  const importantItems: TutorItem[] = importantPaths.map((path) => {
+    ...rankedNodes.map((node) => node.file_path),
+  ]).slice(0, 6);
+  const importantEvidence = importantPaths.map((path) => {
     const node = findBestNodeByPath(nodes, path);
     const onboarding = rankedOnboarding.find((target) => target.path === path);
-    const percentile = node?.pagerank_percentile;
-    return {
-      title: path,
-      detail: node?.summary || "RepoWise ranks this file highly for understanding how the repository fits together.",
-      meta: percentile != null
-        ? `Centrality percentile ${Math.round(percentile)}${onboarding ? " · onboarding target" : ""}`
-        : onboarding
-          ? "Ranked onboarding target"
-          : "High structural importance",
-      href: fileHref(repoId, path),
-    };
+    const rationale = onboarding
+      ? `RepoWise selected this as an onboarding target with graph score ${onboarding.pagerank.toFixed(4)}. It is worth learning early because many other parts of the repository depend on the context it provides.`
+      : "This file ranks highly in the dependency graph, so understanding it gives you context for a disproportionate amount of the repository.";
+    return evidenceForPath(path, nodes, sourceContents, rationale);
   });
 
-  const hotspotItems: TutorItem[] = (overview?.top_hotspots ?? []).slice(0, 6).map((hotspot) => ({
-    title: hotspot.file_path,
-    detail: "This file changes often, so understand its callers, tests, and ownership before editing it.",
-    meta: `${hotspot.commit_count_90d} commits in 90d · bus factor ${hotspot.bus_factor}`,
-    href: fileHref(repoId, hotspot.file_path),
-  }));
+  const firstEntryNode = indexedEntryPoints[0]
+    ? findBestNodeByPath(nodes, indexedEntryPoints[0])
+    : rankedNodes[0];
+  const trace = buildTrace(nodes, edges, firstEntryNode);
+  const traceEvidence = trace.nodes
+    .filter((node) => node.file_path)
+    .map((node, index) =>
+      evidenceForNode(
+        node,
+        sourceContents,
+        index === 0
+          ? "This is the starting boundary for the trace."
+          : "This node is the next strongest dependency in the deterministic execution trace.",
+      ),
+    );
+
+  const hotspotEvidence: TutorEvidence[] = (overview?.top_hotspots ?? []).slice(0, 5).map((hotspot) => {
+    const node = findBestNodeByPath(nodes, hotspot.file_path);
+    const base = node
+      ? evidenceForNode(
+          node,
+          sourceContents,
+          "This file changes frequently. Understand its dependency neighborhood and ownership before editing it.",
+        )
+      : evidenceForPath(
+          hotspot.file_path,
+          nodes,
+          sourceContents,
+          "This file changes frequently. Understand its dependency neighborhood and ownership before editing it.",
+        );
+    return {
+      ...base,
+      signals: unique([
+        ...base.signals,
+        `${hotspot.commit_count_90d} commits / 90d`,
+        `bus factor ${hotspot.bus_factor}`,
+      ]),
+    };
+  });
 
   const decisionItems: TutorItem[] = (overview?.recent_decisions ?? []).slice(0, 5).map((decision) => ({
     title: decision.title,
-    detail: `Status: ${decision.status}${decision.source ? ` · source: ${decision.source}` : ""}`,
-    href: `/repos/${repoId}/decisions`,
+    detail: `This recorded decision is ${decision.status}. Treat it as design context before changing the related boundary or behaviour.`,
+    meta: unique([decision.source ? `source: ${decision.source}` : null, `staleness ${decision.staleness_score.toFixed(2)}`]).join(" · "),
   }));
 
   const largestLayer = [...layers].sort((a, b) => b.file_count - a.file_count)[0];
-  const firstTour = curatedTour[0];
-  const firstImportantPath = importantPaths[0];
-  const firstHotspot = overview?.top_hotspots[0];
+  const firstImportantPath = importantPaths[0] ?? "No ranked file was identified";
+  const firstHotspot = overview?.top_hotspots[0]?.file_path;
+  const traceEnd = trace.nodes.at(-1);
 
   const lessons: TutorLesson[] = [
     {
       id: "orientation",
       eyebrow: "1 · Orientation",
-      title: "Understand what you are looking at",
-      summary: "Start with scale, languages, documentation coverage, and the shape of the repository before reading individual files.",
-      objective: "Build a mental model of the repository without opening code at random.",
-      estimatedMinutes: 4,
+      title: "Build the system picture",
+      summary: "Tutor starts by turning repository statistics and architecture metadata into a mental model you can use before touching code.",
+      objective: "Be able to describe what kind of system this is, its scale, its major technologies, and its broad structural shape.",
+      estimatedMinutes: 5,
       sections: [
         {
-          title: "Repository snapshot",
-          body: architecture?.project_description || `RepoWise has indexed ${repoName}. These figures tell you how large the system is and what kind of code you are about to learn.`,
+          title: "What this repository is",
+          body: architecture?.project_description || `RepoWise has indexed ${repoName}. The measurements below are the foundation for the rest of the course; Tutor will use them to decide what you read next.`,
           facts: [
             { label: "Files", value: stats ? stats.file_count.toLocaleString() : architecture ? architecture.total_files.toLocaleString() : "Unknown" },
             { label: "Symbols", value: stats ? stats.symbol_count.toLocaleString() : architecture ? architecture.total_symbols.toLocaleString() : "Unknown" },
@@ -218,119 +430,169 @@ export function buildTutorCurriculum({
           ],
         },
         {
-          title: "Where to look",
-          body: "Use RepoWise's Overview for the current state and Docs for indexed explanations. Tutor will now choose the order in which to inspect the code itself.",
+          title: "Technology and boundaries",
+          body: "These are not links to other RepoWise features. They are the indexed facts Tutor uses to explain the environment surrounding the codebase.",
           items: [
-            { title: "Repository Overview", detail: "Scale, health, activity, and important repository signals.", href: `/repos/${repoId}/overview` },
-            { title: "Documentation", detail: "Generated and indexed documentation tied back to source files.", href: `/repos/${repoId}/docs` },
+            ...(languages.length ? [{ title: "Languages", detail: languages.join(", "), meta: "Detected from indexed files" }] : []),
+            ...(architecture?.frameworks?.length ? [{ title: "Frameworks", detail: architecture.frameworks.join(", "), meta: "Detected by RepoWise architecture indexing" }] : []),
+            ...(architecture?.external_systems?.length ? [{ title: "External systems", detail: architecture.external_systems.slice(0, 6).map((system) => system.display_name || system.name).join(", "), meta: "Dependencies outside the repository boundary" }] : []),
+            ...(layers.length ? [{ title: "Structural layers", detail: layers.map((layer) => layer.name).join(" → "), meta: "Ordered from the architecture graph" }] : []),
           ],
         },
       ],
-      checkpoint: {
-        question: "Before moving on: what is the primary language in this repository?",
-        answer: primaryLanguage,
-      },
+      checkpoint: makeCheckpoint(
+        "Which language should you expect to see most often while learning this repository?",
+        primaryLanguage,
+        languages.slice(1, 4),
+        `RepoWise reports ${primaryLanguage} as the primary language in the current index.`,
+        1,
+      ),
     },
     {
       id: "entry-points",
       eyebrow: "2 · Entry points",
-      title: "Find where execution begins",
-      summary: "Learn the files where commands, requests, jobs, or application startup enter the system.",
-      objective: "Know where to begin tracing real behaviour instead of browsing folders alphabetically.",
-      estimatedMinutes: 6,
+      title: "Learn where behaviour enters the system",
+      summary: "Instead of telling you to open Files or Architecture, Tutor shows the indexed entry boundaries, their source excerpts, and their immediate dependencies here.",
+      objective: "Recognize the first files and symbols involved when the application, request, command, or job begins executing.",
+      estimatedMinutes: 8,
       sections: [
         {
-          title: "Start from these files",
-          body: entryItems.length
-            ? "RepoWise identified these entry points and candidates from the indexed architecture. Open them in this order and read their responsibilities before following dependencies inward."
-            : "The current index did not identify a confident entry point. Open Architecture and inspect the highest-level nodes before continuing.",
-          items: entryItems.length ? entryItems : [{ title: "Open Architecture", detail: "Inspect top-level nodes and likely entry points.", href: `/repos/${repoId}/architecture` }],
+          title: "Entry boundaries — taught in place",
+          body: entryEvidence.length
+            ? "Read each explanation and source excerpt. The signals are taken from RepoWise's graph, so you can see why Tutor selected the file without leaving this lesson."
+            : "The current index has no confident entry boundary. Tutor will use the highest-centrality production node as the fallback starting point.",
+          evidence: entryEvidence.length
+            ? entryEvidence
+            : firstEntryNode
+              ? [evidenceForNode(firstEntryNode, sourceContents, "Fallback starting point selected by graph centrality.")]
+              : [],
         },
+        ...(entryNeighborhood.length
+          ? [{
+              title: "What those entry points touch first",
+              body: "Follow these relationships in order. They are concrete edges from the indexed graph, not a generic description of how applications usually work.",
+              flow: entryNeighborhood,
+            }]
+          : []),
       ],
-      checkpoint: {
-        question: "Which file should you inspect first when tracing execution?",
-        answer: indexedEntryPoints[0] ?? "No entry point was identified by the current index; use the Architecture view to choose a top-level starting node.",
-      },
+      checkpoint: makeCheckpoint(
+        "Which indexed file is the best first boundary to inspect when tracing behaviour?",
+        indexedEntryPoints[0] ?? firstEntryNode?.file_path ?? firstEntryNode?.name ?? "No entry boundary identified",
+        [...indexedEntryPoints.slice(1, 4), ...importantPaths.slice(0, 2)],
+        "Tutor chooses the first confirmed/ranked entry point before moving inward through dependency edges.",
+        2,
+      ),
     },
     {
       id: "layers",
       eyebrow: "3 · Architecture",
-      title: "Understand the layers and how they connect",
-      summary: "Move from individual files to the structural boundaries RepoWise detected across the repository.",
-      objective: "Understand which parts own which responsibilities and the strongest dependency directions between them.",
-      estimatedMinutes: 7,
+      title: "Understand responsibility boundaries",
+      summary: "Tutor explains the detected layers, shows representative code from them, and demonstrates concrete cross-layer relationships.",
+      objective: "Know which part of the system owns which responsibility and which dependency directions matter most.",
+      estimatedMinutes: 9,
       sections: [
         {
-          title: "Detected layers",
+          title: "Layer responsibilities",
           body: layerItems.length
-            ? "These layers are ordered using RepoWise's architecture model. Read them top to bottom before drilling into implementation details."
-            : "No curated layers are available yet. The Architecture view can still show files and dependency communities.",
-          items: layerItems.length ? layerItems : [{ title: "Architecture map", detail: "Explore dependency communities and files.", href: `/repos/${repoId}/architecture` }],
+            ? "Read the layer descriptions as a responsibility map. The representative files named in each row are high-centrality examples, not destinations you must navigate to."
+            : "The index does not contain curated layers, so Tutor will rely on graph centrality and the guided trace in the next lesson.",
+          items: layerItems,
         },
-        ...(flowItems.length ? [{
-          title: "Strong cross-layer flows",
-          body: "These relationships are derived from indexed dependency edges. They show where understanding one layer requires understanding another.",
-          items: flowItems,
-        }] : []),
+        ...(layerEvidence.length
+          ? [{
+              title: "Representative code",
+              body: "These excerpts let you connect the abstract layer names to actual implementation without leaving Tutor.",
+              evidence: layerEvidence,
+            }]
+          : []),
+        ...(crossLayerFlow.length
+          ? [{
+              title: "How responsibilities cross boundaries",
+              body: "Each row is backed by a real dependency edge between nodes assigned to different layers.",
+              flow: crossLayerFlow,
+            }]
+          : []),
       ],
-      checkpoint: {
-        question: "Which detected layer contains the most files?",
-        answer: largestLayer ? `${largestLayer.name} (${largestLayer.file_count.toLocaleString()} files)` : "No curated architecture layer is available in the current index.",
-      },
+      checkpoint: makeCheckpoint(
+        "Which detected layer owns the largest portion of the repository?",
+        largestLayer ? `${largestLayer.name} (${largestLayer.file_count.toLocaleString()} files)` : "No curated layer is available",
+        layers.filter((layer) => layer.id !== largestLayer?.id).slice(0, 3).map((layer) => `${layer.name} (${layer.file_count.toLocaleString()} files)`),
+        largestLayer
+          ? `${largestLayer.name} is the largest detected layer with ${largestLayer.file_count.toLocaleString()} files.`
+          : "The current index does not expose curated architecture layers.",
+        1,
+      ),
     },
     {
       id: "code-tour",
-      eyebrow: "4 · Guided tour",
-      title: "Follow the code in a deliberate order",
-      summary: "Use RepoWise's curated architecture tour, or a deterministic fallback, to move from outer behaviour toward implementation.",
-      objective: "Learn the code in dependency order instead of opening unrelated files.",
-      estimatedMinutes: 10,
+      eyebrow: "4 · Execution trace",
+      title: "Trace one concrete path through the code",
+      summary: "Tutor follows the strongest indexed dependency edges from an entry boundary and teaches every stop inside this page.",
+      objective: "Be able to narrate one real path through the system from its starting boundary into deeper implementation.",
+      estimatedMinutes: 12,
       sections: [
         {
-          title: "Your code tour",
-          body: tourItems.length
-            ? "Complete these steps in order. Each step comes from the current RepoWise index and points you at a concrete part of the repository."
-            : "The index does not yet contain enough structure for a code tour. Re-index the repository, then return to Tutor.",
-          items: tourItems,
+          title: "The path",
+          body: trace.flow.length
+            ? "This trace is deterministic: at each step Tutor follows the strongest unvisited outgoing production dependency from the previous node."
+            : "The graph does not expose enough outgoing relationships for a multi-step trace, so Tutor shows the strongest available starting evidence instead.",
+          flow: trace.flow,
+        },
+        {
+          title: "Read each stop with context",
+          body: "For every stop, read the indexed summary, dependency signals, and source excerpt. This is the teaching material; opening another RepoWise page is not required.",
+          evidence: traceEvidence,
         },
       ],
-      checkpoint: {
-        question: "What is the first stop in the guided code tour?",
-        answer: firstTour ? firstTour.title : fallbackTourPaths[0] ?? "No tour step is available in the current index.",
-      },
+      checkpoint: makeCheckpoint(
+        "Where does the guided trace end after following the strongest indexed path?",
+        traceEnd?.name || traceEnd?.file_path || "No multi-step trace is available",
+        trace.nodes.slice(0, -1).map((node) => node.name || node.file_path || node.id).slice(0, 3),
+        trace.flow.length
+          ? `The deterministic trace ends at ${traceEnd?.name || traceEnd?.file_path}. Review the edge sequence above to see how it got there.`
+          : "The current graph does not contain enough outgoing edges to form a multi-step trace.",
+        2,
+      ),
     },
     {
       id: "important-code",
       eyebrow: "5 · Core code",
-      title: "Learn the structurally important code first",
-      summary: "Focus on files with high graph importance and onboarding value before spending time on peripheral utilities.",
-      objective: "Recognize the files that give you the most understanding per minute of reading.",
-      estimatedMinutes: 8,
+      title: "Learn the code that gives the most context",
+      summary: "Tutor converts RepoWise graph ranking into an inline reading lesson: what each important file does, why it matters, and what its source looks like.",
+      objective: "Recognize the files that unlock the most understanding and explain why RepoWise considers them structurally important.",
+      estimatedMinutes: 10,
       sections: [
         {
-          title: "High-value reading list",
-          body: importantItems.length
-            ? "RepoWise ranked these files using its graph and onboarding signals. They are strong candidates for building useful context quickly."
-            : "No ranked onboarding targets are available yet. Use Knowledge Graph to inspect central files and symbols.",
-          items: importantItems.length ? importantItems : [{ title: "Knowledge Graph", detail: "Inspect structurally central nodes.", href: `/repos/${repoId}/knowledge-graph` }],
+          title: "High-value reading set",
+          body: importantEvidence.length
+            ? "Work through these in order. Centrality, incoming/outgoing dependency counts, onboarding rank, and source excerpts are shown together so you do not have to assemble the story yourself."
+            : "The current index does not expose ranked onboarding targets or production nodes.",
+          evidence: importantEvidence,
+        },
+        {
+          title: "How to interpret the ranking",
+          body: "High centrality means a node sits in an important position in the dependency graph. Incoming dependencies tell you how much code relies on it; outgoing dependencies tell you how much context it relies on. Tutor combines those signals with onboarding ranking rather than simply choosing the largest file.",
         },
       ],
-      checkpoint: {
-        question: "Which file is currently the highest-priority reading target?",
-        answer: firstImportantPath ?? "No ranked reading target is available in the current index.",
-      },
+      checkpoint: makeCheckpoint(
+        "Which file is currently Tutor's highest-priority core reading target?",
+        firstImportantPath,
+        importantPaths.slice(1, 4),
+        `${firstImportantPath} appears first after combining RepoWise onboarding targets with graph centrality.`,
+        1,
+      ),
     },
     {
       id: "change-safely",
-      eyebrow: "6 · Context & risk",
-      title: "Understand history and risk before you change code",
-      summary: "Finish onboarding by learning which files are volatile, how healthy the repository is, and which decisions shaped the current design.",
-      objective: "Know where extra caution, tests, and historical context are required before making a change.",
-      estimatedMinutes: 8,
+      eyebrow: "6 · Change safely",
+      title: "Learn where a newcomer should be cautious",
+      summary: "The final lesson turns health, change history, ownership, and architectural decisions into practical guidance before your first modification.",
+      objective: "Know which files need extra investigation, tests, and historical context before you edit them.",
+      estimatedMinutes: 9,
       sections: [
         {
-          title: "Repository health signals",
-          body: "These are deterministic signals from the current RepoWise index. They tell you where to slow down and investigate before editing.",
+          title: "Risk picture",
+          body: "These measurements are deterministic RepoWise signals. They tell you where uncertainty and change cost are likely to be higher.",
           facts: [
             { label: "Code health", value: formatHealth(overview?.health.average_health) },
             { label: "Hotspots", value: stats ? stats.hotspot_count.toLocaleString() : "Unknown" },
@@ -340,31 +602,45 @@ export function buildTutorCurriculum({
             { label: "Knowledge silos", value: stats ? stats.silo_count.toLocaleString() : "Unknown" },
           ],
         },
-        ...(hotspotItems.length ? [{
-          title: "Files to treat carefully",
-          body: "Hotspots are files with meaningful recent change activity. Read their tests, owners, and dependencies before changing them.",
-          items: hotspotItems,
-        }] : []),
-        ...(decisionItems.length ? [{
-          title: "Recent architectural decisions",
-          body: "Read these before changing boundaries or behaviour; they explain why parts of the system look the way they do.",
-          items: decisionItems,
-        }] : []),
+        ...(hotspotEvidence.length
+          ? [{
+              title: "Files to understand before editing",
+              body: "Tutor shows the hotspot source and graph signals directly. Frequent change plus a low bus factor is a reason to slow down, find tests, and understand ownership before modifying the file.",
+              evidence: hotspotEvidence,
+            }]
+          : []),
+        ...(decisionItems.length
+          ? [{
+              title: "Design context you should carry forward",
+              body: "These recent decisions explain constraints a newcomer could otherwise accidentally undo. Read the summaries as part of the lesson rather than as a redirect list.",
+              items: decisionItems,
+            }]
+          : []),
       ],
-      checkpoint: {
-        question: "Which file currently deserves the most caution from the hotspot list?",
-        answer: firstHotspot?.file_path ?? decisionItems[0]?.title ?? "No hotspot was reported by the current index.",
-      },
+      checkpoint: makeCheckpoint(
+        firstHotspot
+          ? "Which indexed file currently deserves the most caution because of recent change activity?"
+          : "What should you check before changing a structurally important file?",
+        firstHotspot ?? "Its dependencies, tests, ownership, health, and recorded design decisions",
+        firstHotspot
+          ? (overview?.top_hotspots ?? []).slice(1, 4).map((hotspot) => hotspot.file_path)
+          : ["Only its filename", "Only its line count", "Only the default branch"],
+        firstHotspot
+          ? `${firstHotspot} is the first current hotspot in RepoWise's indexed change-history signals.`
+          : "Safe changes require more than source reading: use dependency, test, ownership, health, and decision context together.",
+        2,
+      ),
     },
   ];
 
   return {
     repoName,
-    subtitle: "A system-led learning path generated from RepoWise's existing index and architecture graph. No AI provider is required.",
+    subtitle: "A deterministic teaching course built from RepoWise's index, dependency graph, source files, health signals, and history. Lessons are taught inside Tutor; no AI provider is required.",
     status: [
       stats ? `${stats.file_count.toLocaleString()} files` : architecture ? `${architecture.total_files.toLocaleString()} files` : null,
       stats ? `${stats.symbol_count.toLocaleString()} symbols` : architecture ? `${architecture.total_symbols.toLocaleString()} symbols` : null,
-      `${lessons.length} guided lessons`,
+      `${lessons.length} taught lessons`,
+      `${Object.keys(sourceContents).length} source files loaded`,
       defaultBranch,
       headCommit ? headCommit.slice(0, 7) : null,
     ].filter((value): value is string => Boolean(value)),
