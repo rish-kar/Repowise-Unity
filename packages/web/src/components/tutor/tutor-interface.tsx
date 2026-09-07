@@ -1,12 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import {
   BookOpen,
   Check,
   ChevronLeft,
   ChevronRight,
-  ExternalLink,
   GraduationCap,
   RotateCcw,
   ShieldCheck,
@@ -14,7 +12,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@repowise-dev/ui/ui";
 import { cn } from "@repowise-dev/ui/lib/cn";
-import type { TutorCurriculum } from "./tutor-curriculum";
+import type { TutorCurriculum, TutorEvidence } from "./tutor-curriculum";
 
 interface TutorInterfaceProps {
   repoId: string;
@@ -25,17 +23,69 @@ const MICRO_LABEL =
   "font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]";
 
 function progressKey(repoId: string) {
-  return `repowise:tutor:${repoId}:completed-v2`;
+  return `repowise:tutor:${repoId}:completed-v3`;
 }
 
 function selectedKey(repoId: string) {
-  return `repowise:tutor:${repoId}:selected-v2`;
+  return `repowise:tutor:${repoId}:selected-v3`;
+}
+
+function EvidenceCard({ evidence, index }: { evidence: TutorEvidence; index: number }) {
+  return (
+    <article className="border-b border-[var(--color-border-default)] py-5 last:border-b-0">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 font-mono text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
+          {String(index + 1).padStart(2, "0")}
+        </span>
+        <div className="min-w-0 flex-1">
+          <h4 className="text-sm font-semibold text-[var(--color-text-primary)]">{evidence.title}</h4>
+          {evidence.path && (
+            <p className="mt-1 break-all font-mono text-[11px] text-[var(--color-accent-primary)]">
+              {evidence.path}
+            </p>
+          )}
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--color-text-secondary)]">
+            {evidence.explanation}
+          </p>
+
+          {evidence.signals.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {evidence.signals.map((signal) => (
+                <span
+                  key={signal}
+                  className="rounded border border-[var(--color-border-default)] bg-[var(--color-bg-elevated)] px-2 py-1 font-mono text-[10px] text-[var(--color-text-tertiary)]"
+                >
+                  {signal}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {evidence.code && (
+            <div className="mt-4 overflow-hidden rounded-md border border-[var(--color-border-default)] bg-[var(--color-bg-inset)]">
+              <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border-default)] px-3 py-2">
+                <span className={MICRO_LABEL}>Source excerpt</span>
+                <span className="font-mono text-[10px] text-[var(--color-text-tertiary)]">
+                  {evidence.lineStart && evidence.lineEnd
+                    ? `lines ${evidence.lineStart}–${evidence.lineEnd}`
+                    : evidence.language || "indexed source"}
+                </span>
+              </div>
+              <pre className="max-h-80 overflow-auto p-4 text-[12px] leading-5 text-[var(--color-text-secondary)]">
+                <code>{evidence.code}</code>
+              </pre>
+            </div>
+          )}
+        </div>
+      </div>
+    </article>
+  );
 }
 
 export function TutorInterface({ repoId, curriculum }: TutorInterfaceProps) {
   const [completed, setCompleted] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState(curriculum.lessons[0]?.id ?? "");
-  const [answerVisible, setAnswerVisible] = useState(false);
+  const [selectedOption, setSelectedOption] = useState<number | null>(null);
 
   useEffect(() => {
     try {
@@ -56,7 +106,7 @@ export function TutorInterface({ repoId, curriculum }: TutorInterfaceProps) {
         if (firstIncomplete) setSelectedId(firstIncomplete.id);
       }
     } catch {
-      // Progress persistence is optional; the deterministic lessons still work.
+      // Progress persistence is optional; deterministic teaching still works.
     }
   }, [curriculum.lessons, repoId]);
 
@@ -77,7 +127,7 @@ export function TutorInterface({ repoId, curriculum }: TutorInterfaceProps) {
   const selectLesson = useCallback(
     (lessonId: string) => {
       setSelectedId(lessonId);
-      setAnswerVisible(false);
+      setSelectedOption(null);
       try {
         window.localStorage.setItem(selectedKey(repoId), lessonId);
       } catch {}
@@ -95,23 +145,31 @@ export function TutorInterface({ repoId, curriculum }: TutorInterfaceProps) {
     [repoId],
   );
 
+  const checkpointPassed = selectedLesson
+    ? completed.includes(selectedLesson.id) || selectedOption === selectedLesson.checkpoint.correctIndex
+    : false;
+
   const markComplete = useCallback(() => {
-    if (!selectedLesson) return;
+    if (!selectedLesson || !checkpointPassed) return;
     const next = completed.includes(selectedLesson.id)
       ? completed
       : [...completed, selectedLesson.id];
     persistCompleted(next);
-  }, [completed, persistCompleted, selectedLesson]);
+  }, [checkpointPassed, completed, persistCompleted, selectedLesson]);
 
   const completeAndContinue = useCallback(() => {
-    if (!selectedLesson) return;
-    markComplete();
+    if (!selectedLesson || !checkpointPassed) return;
+    const next = completed.includes(selectedLesson.id)
+      ? completed
+      : [...completed, selectedLesson.id];
+    persistCompleted(next);
     const nextLesson = curriculum.lessons[selectedIndex + 1];
     if (nextLesson) selectLesson(nextLesson.id);
-  }, [curriculum.lessons, markComplete, selectLesson, selectedIndex, selectedLesson]);
+  }, [checkpointPassed, completed, curriculum.lessons, persistCompleted, selectLesson, selectedIndex, selectedLesson]);
 
   const resetProgress = useCallback(() => {
     persistCompleted([]);
+    setSelectedOption(null);
     const first = curriculum.lessons[0];
     if (first) selectLesson(first.id);
   }, [curriculum.lessons, persistCompleted, selectLesson]);
@@ -124,6 +182,11 @@ export function TutorInterface({ repoId, curriculum }: TutorInterfaceProps) {
     );
   }
 
+  const answerWasWrong =
+    selectedOption !== null && selectedOption !== selectedLesson.checkpoint.correctIndex;
+  const answerWasCorrect =
+    selectedOption !== null && selectedOption === selectedLesson.checkpoint.correctIndex;
+
   return (
     <div className="flex h-full min-h-0 bg-[var(--color-bg-root)]">
       <aside className="hidden w-72 shrink-0 border-r border-[var(--color-border-default)] bg-[var(--color-bg-surface)] lg:flex lg:flex-col">
@@ -134,9 +197,7 @@ export function TutorInterface({ repoId, curriculum }: TutorInterfaceProps) {
             </div>
             <div className="min-w-0">
               <p className="text-sm font-semibold text-[var(--color-text-primary)]">Tutor</p>
-              <p className="truncate text-xs text-[var(--color-text-tertiary)]">
-                {curriculum.repoName}
-              </p>
+              <p className="truncate text-xs text-[var(--color-text-tertiary)]">{curriculum.repoName}</p>
             </div>
           </div>
 
@@ -157,7 +218,7 @@ export function TutorInterface({ repoId, curriculum }: TutorInterfaceProps) {
         </div>
 
         <nav className="min-h-0 flex-1 overflow-y-auto p-3" aria-label="Tutor learning path">
-          <p className={cn(MICRO_LABEL, "mb-2 px-2")}>System-led path</p>
+          <p className={cn(MICRO_LABEL, "mb-2 px-2")}>System-led course</p>
           <div className="space-y-1">
             {curriculum.lessons.map((lesson, index) => {
               const active = lesson.id === selectedLesson.id;
@@ -222,7 +283,7 @@ export function TutorInterface({ repoId, curriculum }: TutorInterfaceProps) {
             </div>
             <div className="hidden items-center gap-2 rounded-md border border-[var(--color-border-default)] bg-[var(--color-bg-elevated)] px-2.5 py-1.5 text-xs text-[var(--color-text-secondary)] sm:flex">
               <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-accent-primary)]" />
-              No AI required
+              Taught from index + source · no AI
             </div>
           </div>
 
@@ -248,14 +309,14 @@ export function TutorInterface({ repoId, curriculum }: TutorInterfaceProps) {
             {selectedIndex === 0 && (
               <section className="border-b border-[var(--color-border-default)] pb-8">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className={MICRO_LABEL}>Generated from current RepoWise index</span>
+                  <span className={MICRO_LABEL}>Generated from current RepoWise index + local source</span>
                   <span className="text-[var(--color-text-tertiary)]">·</span>
                   <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--color-accent-primary)]">
                     {curriculum.lessons.length} lessons · ~{totalMinutes} min
                   </span>
                 </div>
                 <h1 className="mt-3 max-w-3xl text-2xl font-semibold tracking-tight text-[var(--color-text-primary)] sm:text-3xl">
-                  Learn {curriculum.repoName} in the order the codebase suggests
+                  Learn {curriculum.repoName} without assembling the story yourself
                 </h1>
                 <p className="mt-3 max-w-3xl text-[15px] leading-7 text-[var(--color-text-secondary)]">
                   {curriculum.subtitle}
@@ -294,70 +355,113 @@ export function TutorInterface({ repoId, curriculum }: TutorInterfaceProps) {
                 )}
 
                 {section.items && section.items.length > 0 && (
-                  <ul className="mt-5 border-t border-[var(--color-border-default)]">
-                    {section.items.map((item, index) => {
-                      const content = (
-                        <>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-start gap-2">
-                              <span className="mt-0.5 font-mono text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
-                                {String(index + 1).padStart(2, "0")}
-                              </span>
-                              <span className="min-w-0 break-words text-sm font-medium text-[var(--color-text-primary)]">
-                                {item.title}
-                              </span>
-                            </div>
-                            {item.detail && (
-                              <p className="mt-1 pl-7 text-sm leading-6 text-[var(--color-text-secondary)]">
-                                {item.detail}
-                              </p>
-                            )}
-                            {item.meta && (
-                              <p className="mt-1 pl-7 font-mono text-[11px] text-[var(--color-text-tertiary)]">
-                                {item.meta}
-                              </p>
-                            )}
-                          </div>
-                          {item.href && <ExternalLink className="mt-1 h-3.5 w-3.5 shrink-0 text-[var(--color-text-tertiary)]" />}
-                        </>
-                      );
-
-                      return (
-                        <li key={`${item.title}:${index}`} className="border-b border-[var(--color-border-default)]">
-                          {item.href ? (
-                            <Link
-                              href={item.href}
-                              className="flex items-start gap-3 py-4 transition-colors hover:bg-[var(--color-bg-overlay)]"
-                            >
-                              {content}
-                            </Link>
-                          ) : (
-                            <div className="flex items-start gap-3 py-4">{content}</div>
+                  <div className="mt-5 border-t border-[var(--color-border-default)]">
+                    {section.items.map((item, index) => (
+                      <div key={`${item.title}:${index}`} className="flex items-start gap-3 border-b border-[var(--color-border-default)] py-4">
+                        <span className="mt-0.5 font-mono text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
+                          {String(index + 1).padStart(2, "0")}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-[var(--color-text-primary)]">{item.title}</p>
+                          {item.detail && (
+                            <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">{item.detail}</p>
                           )}
-                        </li>
-                      );
-                    })}
-                  </ul>
+                          {item.meta && (
+                            <p className="mt-1 font-mono text-[11px] leading-5 text-[var(--color-text-tertiary)]">{item.meta}</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {section.flow && section.flow.length > 0 && (
+                  <ol className="mt-5 border-t border-[var(--color-border-default)]">
+                    {section.flow.map((step, index) => (
+                      <li key={`${step.from}:${step.to}:${index}`} className="border-b border-[var(--color-border-default)] py-4">
+                        <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
+                          <span className="font-mono text-[10px] text-[var(--color-text-tertiary)]">{String(index + 1).padStart(2, "0")}</span>
+                          <span className="min-w-0 break-words">{step.from}</span>
+                          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--color-accent-primary)]" />
+                          <span className="min-w-0 break-words">{step.to}</span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-start gap-2 pl-7">
+                          <span className="rounded border border-[var(--color-border-default)] bg-[var(--color-bg-elevated)] px-2 py-0.5 font-mono text-[10px] text-[var(--color-accent-primary)]">
+                            {step.relation}
+                          </span>
+                          <p className="max-w-3xl text-sm leading-6 text-[var(--color-text-secondary)]">{step.explanation}</p>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+
+                {section.evidence && section.evidence.length > 0 && (
+                  <div className="mt-5 border-t border-[var(--color-border-default)]">
+                    {section.evidence.map((evidence, index) => (
+                      <EvidenceCard key={`${evidence.path ?? evidence.title}:${index}`} evidence={evidence} index={index} />
+                    ))}
+                  </div>
                 )}
               </section>
             ))}
 
             <section className="rounded-lg border border-[var(--color-border-default)] bg-[var(--color-bg-surface)] p-5">
-              <p className={MICRO_LABEL}>Checkpoint</p>
+              <div className="flex items-center justify-between gap-3">
+                <p className={MICRO_LABEL}>Knowledge checkpoint</p>
+                {completed.includes(selectedLesson.id) && (
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-accent-primary)]">
+                    <Check className="h-3.5 w-3.5" /> Completed
+                  </span>
+                )}
+              </div>
               <p className="mt-2 text-sm font-medium leading-6 text-[var(--color-text-primary)]">
                 {selectedLesson.checkpoint.question}
               </p>
-              {answerVisible ? (
+              <div className="mt-4 grid gap-2">
+                {selectedLesson.checkpoint.options.map((option, index) => {
+                  const chosen = selectedOption === index;
+                  const correct = index === selectedLesson.checkpoint.correctIndex;
+                  const showCorrect = answerWasCorrect && correct;
+                  const showWrong = answerWasWrong && chosen;
+                  return (
+                    <button
+                      key={`${option}:${index}`}
+                      type="button"
+                      disabled={completed.includes(selectedLesson.id)}
+                      onClick={() => setSelectedOption(index)}
+                      className={cn(
+                        "rounded-md border px-3 py-2.5 text-left text-sm transition-colors",
+                        showCorrect
+                          ? "border-[var(--color-accent-primary)] bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]"
+                          : showWrong
+                            ? "border-[var(--color-border-strong)] bg-[var(--color-bg-inset)] text-[var(--color-text-secondary)]"
+                            : chosen
+                              ? "border-[var(--color-accent-primary)] bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]"
+                              : "border-[var(--color-border-default)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-overlay)] hover:text-[var(--color-text-primary)]",
+                      )}
+                    >
+                      <span className="mr-2 font-mono text-[10px] text-[var(--color-text-tertiary)]">
+                        {String.fromCharCode(65 + index)}.
+                      </span>
+                      {option}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {answerWasCorrect && (
                 <div className="mt-4 border-l-2 border-[var(--color-accent-primary)] pl-4">
-                  <p className={MICRO_LABEL}>Answer from the index</p>
+                  <p className={MICRO_LABEL}>Correct — why</p>
                   <p className="mt-1 text-sm leading-6 text-[var(--color-text-secondary)]">
-                    {selectedLesson.checkpoint.answer}
+                    {selectedLesson.checkpoint.explanation}
                   </p>
                 </div>
-              ) : (
-                <Button variant="outline" size="sm" className="mt-4" onClick={() => setAnswerVisible(true)}>
-                  Reveal answer
-                </Button>
+              )}
+              {answerWasWrong && (
+                <p className="mt-4 text-sm text-[var(--color-text-secondary)]">
+                  Not quite. Review the evidence above and choose again; Tutor will not mark the lesson complete until the checkpoint is correct.
+                </p>
               )}
             </section>
 
@@ -376,25 +480,17 @@ export function TutorInterface({ repoId, curriculum }: TutorInterfaceProps) {
                 Previous
               </Button>
 
-              <div className="flex items-center gap-2 sm:justify-end">
-                {!completed.includes(selectedLesson.id) && (
-                  <Button variant="ghost" size="sm" onClick={markComplete} className="gap-1.5">
-                    <Check className="h-4 w-4" />
-                    Mark complete
-                  </Button>
-                )}
-                {selectedIndex < curriculum.lessons.length - 1 ? (
-                  <Button size="sm" onClick={completeAndContinue} className="gap-1.5">
-                    Complete & continue
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                ) : (
-                  <Button size="sm" onClick={markComplete} className="gap-1.5">
-                    <Check className="h-4 w-4" />
-                    Finish path
-                  </Button>
-                )}
-              </div>
+              {selectedIndex < curriculum.lessons.length - 1 ? (
+                <Button size="sm" disabled={!checkpointPassed} onClick={completeAndContinue} className="gap-1.5">
+                  Complete lesson & continue
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              ) : (
+                <Button size="sm" disabled={!checkpointPassed} onClick={markComplete} className="gap-1.5">
+                  <Check className="h-4 w-4" />
+                  Finish course
+                </Button>
+              )}
             </div>
           </div>
         </div>
