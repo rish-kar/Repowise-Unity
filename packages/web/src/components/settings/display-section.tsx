@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTheme } from "next-themes";
 import { OverviewSection } from "@repowise-dev/ui/overview";
 import {
   Select,
@@ -17,10 +18,12 @@ import {
 } from "@repowise-dev/ui/settings";
 import { Switch } from "@repowise-dev/ui/ui/switch";
 import { DEFAULT_WEEKEND_PRESET, WEEKEND_PRESETS } from "@repowise-dev/ui/stats";
+import { THEME_OPTIONS } from "@/components/layout/theme-provider";
 import { config, setChatDockHidden } from "@/lib/config";
 
 /** Reader-local display preferences for the stats surfaces. */
 export function DisplaySection() {
+  const { theme, setTheme } = useTheme();
   const [weekend, setWeekend] = useState(DEFAULT_WEEKEND_PRESET.id);
   const [dockShown, setDockShown] = useState(true);
   const [saveState, setSaveState] = useState<SaveState>("idle");
@@ -45,6 +48,11 @@ export function DisplaySection() {
     savedTimer.current = setTimeout(() => setSaveState("idle"), 2000);
   }
 
+  function handleThemeChange(v: string) {
+    setTheme(v);
+    markSaved();
+  }
+
   function handleChange(v: string) {
     setWeekend(v);
     config.setWeekend(v);
@@ -66,6 +74,20 @@ export function DisplaySection() {
       action={<SaveIndicator state={saveState} />}
     >
       <SettingsRows>
+        <SettingsRow label="Theme" hint="Choose the application colour theme.">
+          <Select value={theme ?? "light"} onValueChange={handleThemeChange}>
+            <SelectTrigger className="w-full sm:w-64">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {THEME_OPTIONS.map((option) => (
+                <SelectItem key={option.id} value={option.id}>
+                  {option.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </SettingsRow>
         <SettingsRow
           label="Weekend days"
           hint="Drives the “on weekends” share on the coding-rhythm heatmap."
