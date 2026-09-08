@@ -18,12 +18,19 @@ import {
 } from "@repowise-dev/ui/settings";
 import { Switch } from "@repowise-dev/ui/ui/switch";
 import { DEFAULT_WEEKEND_PRESET, WEEKEND_PRESETS } from "@repowise-dev/ui/stats";
-import { THEME_OPTIONS } from "@/components/layout/theme-provider";
+import {
+  CUSTOM_THEME_EVENT,
+  THEME_OPTIONS,
+  getCustomThemeBase,
+  getStoredCustomTheme,
+  setStoredCustomTheme,
+} from "@/components/layout/theme-provider";
 import { config, setChatDockHidden } from "@/lib/config";
 
 /** Reader-local display preferences for the stats surfaces. */
 export function DisplaySection() {
   const { theme, setTheme } = useTheme();
+  const [selectedTheme, setSelectedTheme] = useState("light");
   const [weekend, setWeekend] = useState(DEFAULT_WEEKEND_PRESET.id);
   const [dockShown, setDockShown] = useState(true);
   const [saveState, setSaveState] = useState<SaveState>("idle");
@@ -34,6 +41,15 @@ export function DisplaySection() {
     setWeekend(config.getWeekend() || DEFAULT_WEEKEND_PRESET.id);
     setDockShown(!config.getChatDockHidden());
   }, []);
+
+  useEffect(() => {
+    const syncTheme = () => {
+      setSelectedTheme(getStoredCustomTheme() ?? (theme === "dark" ? "dark" : "light"));
+    };
+    syncTheme();
+    window.addEventListener(CUSTOM_THEME_EVENT, syncTheme);
+    return () => window.removeEventListener(CUSTOM_THEME_EVENT, syncTheme);
+  }, [theme]);
 
   useEffect(
     () => () => {
@@ -49,7 +65,14 @@ export function DisplaySection() {
   }
 
   function handleThemeChange(v: string) {
-    setTheme(v);
+    setSelectedTheme(v);
+    if (v === "light" || v === "dark") {
+      setStoredCustomTheme(null);
+      setTheme(v);
+    } else {
+      setStoredCustomTheme(v);
+      setTheme(getCustomThemeBase(v));
+    }
     markSaved();
   }
 
@@ -75,7 +98,7 @@ export function DisplaySection() {
     >
       <SettingsRows>
         <SettingsRow label="Theme" hint="Choose the application colour theme.">
-          <Select value={theme ?? "light"} onValueChange={handleThemeChange}>
+          <Select value={selectedTheme} onValueChange={handleThemeChange}>
             <SelectTrigger className="w-full sm:w-64">
               <SelectValue />
             </SelectTrigger>
