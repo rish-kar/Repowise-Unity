@@ -14,6 +14,7 @@ export default function ChangeAnalyserPage() {
       title="Change Analyser"
       icon={<GitMerge className="h-5 w-5 text-[var(--color-accent-primary)]" />}
       description="Analyse the code you intend to change, the symbols and contracts involved, downstream dependencies, reviewers, and tests that need attention."
+      className="[--color-border-subtle:var(--color-border-default)]"
     >
       <ChangeAnalyserInterface repoId={repoId} />
     </PageShell>
