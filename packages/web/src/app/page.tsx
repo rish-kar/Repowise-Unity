@@ -14,6 +14,7 @@ import { formatNumber } from "@repowise-dev/ui/lib/format";
 import { getReposSummary } from "@/lib/api/repos";
 import { listJobs } from "@/lib/api/jobs";
 import { getWorkspace } from "@/lib/api/workspace";
+import { withApiStartupRetry } from "@/lib/api/startup-retry";
 import { attentionSentence, byAttention } from "@/lib/repo-attention";
 import { DeleteRepoButton } from "@/components/repos/delete-repo-button";
 import { EmptyReposState } from "@/components/repos/empty-repos-state";
@@ -47,12 +48,14 @@ const JOB_WINDOW = 10;
  * above it.
  */
 export default async function DashboardPage() {
-  // One wave. The shape this replaces fetched the repo list, then a stats call
-  // per repo, then a git-summary call per repo, in two sequential rounds.
+  // One wave. On a cold `repowise serve`, the UI process can become reachable
+  // just before the API socket is ready. Retry that short startup window so a
+  // transient connection refusal cannot masquerade as a genuine empty repo
+  // list and leave the dashboard in the wrong state until a manual refresh.
   const [summary, jobs, ws] = await Promise.allSettled([
-    getReposSummary(),
-    listJobs({ limit: JOB_WINDOW }),
-    getWorkspace({ cache: "no-store" }),
+    withApiStartupRetry(() => getReposSummary()),
+    withApiStartupRetry(() => listJobs({ limit: JOB_WINDOW })),
+    withApiStartupRetry(() => getWorkspace({ cache: "no-store" })),
   ]);
 
   const repos = summary.status === "fulfilled" ? summary.value.repos : [];

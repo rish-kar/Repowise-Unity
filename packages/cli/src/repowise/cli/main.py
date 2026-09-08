@@ -88,7 +88,7 @@ _OSS_COMMANDS: tuple[tuple[str, str], ...] = (
     ("status", "status_cmd:status_command"),
     ("doctor", "doctor_cmd:doctor_command"),
     ("watch", "watch_cmd:watch_command"),
-    ("serve", "serve_cmd:serve_command"),
+    ("serve", "serve_unified_cmd:serve_command"),
     ("mcp", "mcp_cmd:mcp_command"),
     ("reindex", "reindex_cmd:reindex_command"),
     ("restyle", "restyle_cmd:restyle_command"),
