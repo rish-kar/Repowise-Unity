@@ -12,7 +12,6 @@
  * choice explicit). Consumers set `enableSystem={false}` on their provider;
  * the mount effect below migrates any stale persisted "system" value to the
  * light default so pre-simplification visitors don't keep that stale value.
- * Custom theme values are left untouched.
  *
  * The selected option is expressed in CSS off the `dark` class that
  * next-themes writes on `<html>` before first paint, NOT off React state.
@@ -31,6 +30,9 @@ const OPTIONS = [
   { value: "light" as const, label: "Light", icon: Sun },
   { value: "dark" as const, label: "Dark", icon: Moon },
 ];
+
+const CUSTOM_THEME_STORAGE_KEY = "repowise-custom-theme";
+const CUSTOM_THEME_EVENT = "repowise-custom-theme-change";
 
 const SELECTED =
   "bg-[var(--color-bg-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-sm)]";
@@ -55,10 +57,15 @@ export function ThemeToggle({ compact = false, className }: ThemeToggleProps) {
     setMounted(true);
   }, []);
 
-  // Migrate only the old persisted "system" value to the explicit light default.
   useEffect(() => {
     if (mounted && theme === "system") setTheme("light");
   }, [mounted, theme, setTheme]);
+
+  function selectTheme(value: "light" | "dark") {
+    window.localStorage.removeItem(CUSTOM_THEME_STORAGE_KEY);
+    window.dispatchEvent(new Event(CUSTOM_THEME_EVENT));
+    setTheme(value);
+  }
 
   return (
     <div
@@ -79,7 +86,7 @@ export function ThemeToggle({ compact = false, className }: ThemeToggleProps) {
             aria-checked={mounted && theme === opt.value}
             aria-label={opt.label}
             title={opt.label}
-            onClick={() => setTheme(opt.value)}
+            onClick={() => selectTheme(opt.value)}
             className={cn(
               "inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors",
               compact ? "px-1.5 py-1" : "px-3 py-1.5",
