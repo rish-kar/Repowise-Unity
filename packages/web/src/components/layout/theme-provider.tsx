@@ -1,7 +1,7 @@
 "use client";
 
 import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 type WaypointTheme = {
   id: string;
@@ -87,14 +87,28 @@ export const THEME_OPTIONS = [
   ...WAYPOINT_THEMES.map((theme) => ({ id: theme.id, name: theme.name })),
 ];
 
-const THEME_IDS = THEME_OPTIONS.map((theme) => theme.id);
-const THEME_VALUES = Object.fromEntries([
-  ["light", "light"],
-  ["dark", "dark"],
-  ...WAYPOINT_THEMES.map(
-    (theme) => [theme.id, theme.id === "paper-light" ? "light" : "dark"] as const,
-  ),
-]);
+export const CUSTOM_THEME_STORAGE_KEY = "repowise-custom-theme";
+export const CUSTOM_THEME_EVENT = "repowise-custom-theme-change";
+
+export function getStoredCustomTheme() {
+  if (typeof window === "undefined") return null;
+  const stored = window.localStorage.getItem(CUSTOM_THEME_STORAGE_KEY);
+  return WAYPOINT_THEMES.some((theme) => theme.id === stored) ? stored : null;
+}
+
+export function setStoredCustomTheme(themeId: string | null) {
+  if (typeof window === "undefined") return;
+  if (themeId && WAYPOINT_THEMES.some((theme) => theme.id === themeId)) {
+    window.localStorage.setItem(CUSTOM_THEME_STORAGE_KEY, themeId);
+  } else {
+    window.localStorage.removeItem(CUSTOM_THEME_STORAGE_KEY);
+  }
+  window.dispatchEvent(new Event(CUSTOM_THEME_EVENT));
+}
+
+export function getCustomThemeBase(themeId: string): "light" | "dark" {
+  return themeId === "paper-light" ? "light" : "dark";
+}
 
 const CUSTOM_THEME_VARIABLES = [
   "--color-bg-root",
@@ -141,7 +155,27 @@ function readableOnAccent(first: string, second: string) {
 }
 
 function ThemeVariables({ children }: { children: ReactNode }) {
-  const { theme } = useTheme();
+  const { theme, setTheme } = useTheme();
+  const [customTheme, setCustomTheme] = useState<string | null>(null);
+
+  useEffect(() => {
+    const legacyTheme = WAYPOINT_THEMES.find((item) => item.id === theme);
+    if (legacyTheme && !getStoredCustomTheme()) {
+      setStoredCustomTheme(legacyTheme.id);
+      setTheme(getCustomThemeBase(legacyTheme.id));
+    }
+  }, [theme, setTheme]);
+
+  useEffect(() => {
+    const sync = () => setCustomTheme(getStoredCustomTheme());
+    sync();
+    window.addEventListener(CUSTOM_THEME_EVENT, sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener(CUSTOM_THEME_EVENT, sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -149,7 +183,7 @@ function ThemeVariables({ children }: { children: ReactNode }) {
       root.style.removeProperty(variable);
     }
 
-    const selected = WAYPOINT_THEMES.find((item) => item.id === theme);
+    const selected = WAYPOINT_THEMES.find((item) => item.id === customTheme);
     if (!selected) return;
 
     const inset = `color-mix(in srgb, ${selected.overlay} 86%, ${selected.accent})`;
@@ -180,23 +214,18 @@ function ThemeVariables({ children }: { children: ReactNode }) {
     for (const [variable, value] of Object.entries(variables)) {
       root.style.setProperty(variable, value);
     }
-  }, [theme]);
+  }, [customTheme]);
 
   return children;
 }
 
-/**
- * Product theme provider. Repowise Light/Dark keep the existing token contract;
- * Waypoint themes reuse the same contract with their palette values.
- */
 export function ThemeProvider({ children }: { children: ReactNode }) {
   return (
     <NextThemesProvider
       attribute="class"
       defaultTheme="light"
       enableSystem={false}
-      themes={THEME_IDS}
-      value={THEME_VALUES}
+      themes={["light", "dark"]}
       disableTransitionOnChange
     >
       <ThemeVariables>{children}</ThemeVariables>
