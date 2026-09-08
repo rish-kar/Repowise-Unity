@@ -67,13 +67,12 @@ export function ThemeToggle({ compact = false, className }: ThemeToggleProps) {
     setTheme(value);
   }
 
+  if (compact) return null;
+
   return (
     <div
       role="radiogroup"
       aria-label="Theme preference"
-      // No resting border, fill, or shadow: this is a once-per-session
-      // control and the permanent track was carrying more weight than the
-      // navigation above it. The selected pill is the only ground.
       className={cn("inline-flex items-center gap-1 rounded-lg p-0.5", className)}
     >
       {OPTIONS.map((opt) => {
@@ -89,17 +88,14 @@ export function ThemeToggle({ compact = false, className }: ThemeToggleProps) {
             onClick={() => selectTheme(opt.value)}
             className={cn(
               "inline-flex items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors",
-              compact ? "px-1.5 py-1" : "px-3 py-1.5",
-              // Selected-ness comes from the ancestor `dark` class, so it is
-              // right on the first painted frame. Each option is styled
-              // selected in its own theme and quiet in the other.
+              "px-3 py-1.5",
               opt.value === "light"
                 ? [SELECTED, DARK_UNSELECTED]
                 : [UNSELECTED, DARK_SELECTED],
             )}
           >
             <Icon className="h-3.5 w-3.5 shrink-0" />
-            {!compact && opt.label}
+            {opt.label}
           </button>
         );
       })}
