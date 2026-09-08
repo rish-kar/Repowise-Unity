@@ -5,6 +5,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   tutor: "Tutor",
   architecture: "Architecture",
   "code-health": "Code Health",
+  "change-analyser": "Change Analyser",
   coverage: "Tests",
   "refactoring-targets": "Refactoring Targets",
   trend: "Trend",
