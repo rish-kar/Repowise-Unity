@@ -16,6 +16,7 @@ import { SWRProvider } from "@/components/layout/swr-provider";
 import { UpgradeBanner } from "@/components/layout/upgrade-banner";
 import { listRepos } from "@/lib/api/repos";
 import { getWorkspace } from "@/lib/api/workspace";
+import { withApiStartupRetry } from "@/lib/api/startup-retry";
 import type { WorkspaceResponse } from "@/lib/api/types";
 import "@/styles/globals.css";
 
@@ -35,19 +36,22 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  // Fetch repos + workspace info server-side for the sidebar.
+  // Fetch repos + workspace info server-side for the sidebar. During a cold
+  // single-app start, Next.js can receive the browser request just before the
+  // API finishes binding. Retry that brief startup window so a transient race
+  // never becomes a persistent "Can't reach the API" sidebar until reload.
   //
-  // A rejection is NOT an empty account. Falling back to `[]` silently made
-  // an unreachable API render the exact first-run "add your first repo"
-  // invitation a genuine new user sees, so a user whose server was down was
-  // being onboarded instead of told. `reposUnavailable` keeps the two apart.
+  // A rejection after the retry window is NOT an empty account. Falling back
+  // to `[]` silently made an unreachable API render the exact first-run "add
+  // your first repo" invitation a genuine new user sees, so
+  // `reposUnavailable` keeps the two apart.
   let repos: Awaited<ReturnType<typeof listRepos>> = [];
   let workspace: WorkspaceResponse | null = null;
   let reposUnavailable = false;
   try {
     const [reposResult, wsResult] = await Promise.allSettled([
-      listRepos(),
-      getWorkspace(),
+      withApiStartupRetry(() => listRepos()),
+      withApiStartupRetry(() => getWorkspace()),
     ]);
     if (reposResult.status === "fulfilled") repos = reposResult.value;
     else reposUnavailable = true;
