@@ -22,7 +22,6 @@ import {
 import { ScrollArea } from "@repowise-dev/ui/ui/scroll-area";
 import { Separator } from "@repowise-dev/ui/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@repowise-dev/ui/ui/tooltip";
-import { ThemeToggle } from "@repowise-dev/ui/shared/theme-toggle";
 import { AddRepoDialog } from "@/components/repos/add-repo-dialog";
 import { VersionFooter } from "./version-footer";
 import { FeedbackButton } from "./feedback-button";
@@ -448,23 +447,10 @@ export function Sidebar({
         </div>
       </ScrollArea>
 
-      {/* Footer. Collapsed, it keeps the theme control rather than vanishing:
-          at 56px the whole footer used to disappear, so theme, feedback, and
-          version were unreachable without expanding first. */}
-      {isIconOnly ? (
-        <div className="flex flex-col items-center border-t border-[var(--color-border-default)] py-1.5">
-          <ThemeToggle compact />
-        </div>
-      ) : (
+      {!isIconOnly && (
         <div className="flex flex-col gap-2 border-t border-[var(--color-border-default)] px-3 py-2">
           <FeedbackButton />
-          {/* Version and theme share a row. The toggle was a full-width
-              bordered track stacked on its own line, which made a
-              once-per-session control the tallest thing in the footer. */}
-          <div className="flex items-center justify-between gap-2">
-            <VersionFooter />
-            <ThemeToggle compact />
-          </div>
+          <VersionFooter />
         </div>
       )}
     </aside>
@@ -589,4 +575,3 @@ function SidebarNavItem({
     </Link>
   );
 }
-
