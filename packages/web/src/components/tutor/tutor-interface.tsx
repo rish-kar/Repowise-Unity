@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@repowise-dev/ui/ui";
 import { cn } from "@repowise-dev/ui/lib/cn";
 import type { TutorCurriculum, TutorEvidence } from "./tutor-curriculum";
+import { TutorSectionExercises } from "./tutor-exercises";
 
 interface TutorInterfaceProps {
   repoId: string;
@@ -403,6 +404,8 @@ export function TutorInterface({ repoId, curriculum }: TutorInterfaceProps) {
                     ))}
                   </div>
                 )}
+
+                <TutorSectionExercises section={section} />
               </section>
             ))}
 
