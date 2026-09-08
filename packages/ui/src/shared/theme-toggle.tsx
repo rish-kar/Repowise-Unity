@@ -11,9 +11,8 @@
  * Deliberately two-state — no "System" option (product decision: keep the
  * choice explicit). Consumers set `enableSystem={false}` on their provider;
  * the mount effect below migrates any stale persisted "system" value to the
- * light default so pre-simplification visitors don't keep an unknown theme.
- * The migration only fires for non light/dark values, so an explicit Light or
- * Dark choice is never rewritten.
+ * light default so pre-simplification visitors don't keep that stale value.
+ * Custom theme values are left untouched.
  *
  * The selected option is expressed in CSS off the `dark` class that
  * next-themes writes on `<html>` before first paint, NOT off React state.
@@ -56,11 +55,9 @@ export function ThemeToggle({ compact = false, className }: ThemeToggleProps) {
     setMounted(true);
   }, []);
 
-  // Migrate a persisted "system" (or any unknown) theme from before the
-  // simplification to the explicit light default. Only fires for non
-  // light/dark values, so an explicit user choice is never clobbered.
+  // Migrate only the old persisted "system" value to the explicit light default.
   useEffect(() => {
-    if (mounted && theme !== "light" && theme !== "dark") setTheme("light");
+    if (mounted && theme === "system") setTheme("light");
   }, [mounted, theme, setTheme]);
 
   return (
