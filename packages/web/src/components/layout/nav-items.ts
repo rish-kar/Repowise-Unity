@@ -4,7 +4,7 @@
  *
  * Repo IA (6 groups + Settings pinned last):
  *   Overview · Docs · Architecture · Knowledge Graph · Code Health ·
- *   People & History · Tutor · Chat
+ *   Change Analyser · People & History · Tutor · Chat
  */
 
 import {
@@ -68,6 +68,7 @@ export function repoNavGroups(repoId: string): NavGroup[] {
         { label: "Knowledge Graph", href: `${base}/knowledge-graph`, icon: ScanSearch },
         { label: "Code Health", href: `${base}/code-health`, icon: HeartPulse },
         { label: "Refactoring", href: `${base}/refactoring`, icon: Wrench },
+        { label: "Change Analyser", href: `${base}/change-analyser`, icon: GitMerge },
         { label: "Files", href: `${base}/files`, icon: FolderTree },
       ],
     },
