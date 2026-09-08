@@ -24,6 +24,10 @@ describe("getRepositoryChatContext", () => {
       kind: "risk",
       label: "Dead Code",
     });
+    expect(getRepositoryChatContext("/repos/r1/change-analyser")).toEqual({
+      kind: "risk",
+      label: "Change Analyser",
+    });
   });
 
   it("preserves decoded dynamic file targets as machine context", () => {
@@ -105,6 +109,9 @@ describe("getRepositoryChatContext", () => {
     files.append("file", "src/b.ts");
     expect(
       getRepositoryChatContext("/repos/r1/code-health", files),
+    ).toMatchObject({ target: "src/a.ts, src/b.ts", targetKind: "path" });
+    expect(
+      getRepositoryChatContext("/repos/r1/change-analyser", files),
     ).toMatchObject({ target: "src/a.ts, src/b.ts", targetKind: "path" });
     expect(
       getRepositoryChatContext(
