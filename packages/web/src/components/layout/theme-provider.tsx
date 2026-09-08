@@ -179,9 +179,13 @@ function ThemeVariables({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const root = document.documentElement;
+    const body = document.body;
+
     for (const variable of CUSTOM_THEME_VARIABLES) {
       root.style.removeProperty(variable);
     }
+    body.style.removeProperty("background-image");
+    body.style.removeProperty("background-attachment");
 
     const selected = WAYPOINT_THEMES.find((item) => item.id === customTheme);
     if (!selected) return;
@@ -214,6 +218,13 @@ function ThemeVariables({ children }: { children: ReactNode }) {
     for (const [variable, value] of Object.entries(variables)) {
       root.style.setProperty(variable, value);
     }
+
+    body.style.backgroundImage = [
+      `radial-gradient(circle at 14% 10%, color-mix(in srgb, ${selected.accent} 30%, transparent), transparent 44%)`,
+      `radial-gradient(circle at 86% 86%, color-mix(in srgb, ${selected.accentSoft} 24%, transparent), transparent 48%)`,
+      `linear-gradient(145deg, color-mix(in srgb, ${selected.overlay} 82%, ${selected.accent} 18%), ${selected.overlay} 52%, color-mix(in srgb, ${selected.overlay} 88%, ${selected.accentSoft} 12%))`,
+    ].join(", ");
+    body.style.backgroundAttachment = "fixed";
   }, [customTheme]);
 
   return children;
