@@ -36,7 +36,6 @@ export function DisplaySection() {
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Read after mount so SSR and the first client render agree.
   useEffect(() => {
     setWeekend(config.getWeekend() || DEFAULT_WEEKEND_PRESET.id);
     setDockShown(!config.getChatDockHidden());
@@ -84,8 +83,6 @@ export function DisplaySection() {
 
   function handleDockChange(shown: boolean) {
     setDockShown(shown);
-    // Goes through the helper, not `config` directly: the dock is mounted on a
-    // different route and needs the event to notice.
     setChatDockHidden(!shown);
     markSaved();
   }
@@ -102,7 +99,12 @@ export function DisplaySection() {
             <SelectTrigger className="w-full sm:w-64">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent
+              style={{
+                background:
+                  "color-mix(in srgb, var(--color-bg-overlay) 35%, var(--color-bg-root) 65%)",
+              }}
+            >
               {THEME_OPTIONS.map((option) => (
                 <SelectItem key={option.id} value={option.id}>
                   {option.name}
