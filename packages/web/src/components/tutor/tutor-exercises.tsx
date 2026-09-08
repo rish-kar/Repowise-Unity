@@ -90,7 +90,7 @@ export function TutorSectionExercises({ section }: { section: TutorSection }) {
       <div className="border-b border-[var(--color-border-default)] py-4">
         <p className={MICRO_LABEL}>Hands-on practice</p>
         <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-          These are deterministic exercises checked against RepoWise's indexed facts — not another multiple-choice quiz.
+          These are deterministic exercises checked against RepoWise&apos;s indexed facts — not another multiple-choice quiz.
         </p>
       </div>
       {exercises.map((exercise, index) => (
