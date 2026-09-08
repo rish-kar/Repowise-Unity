@@ -18,7 +18,6 @@ import { Separator } from "@repowise-dev/ui/ui/separator";
 import { AddRepoDialog } from "@/components/repos/add-repo-dialog";
 import { VersionFooter } from "./version-footer";
 import { FeedbackButton } from "./feedback-button";
-import { ThemeToggle } from "@repowise-dev/ui/shared/theme-toggle";
 import { cn } from "@/lib/utils/cn";
 import {
   GLOBAL_NAV,
@@ -270,13 +269,7 @@ export function MobileNav({ repos = [], workspace }: MobileNavProps) {
 
           <div className="flex flex-col gap-2 border-t border-[var(--color-border-default)] px-4 py-2.5">
             <FeedbackButton />
-            {/* Mobile had no theme control anywhere in the shell, so the
-                preference was simply unreachable on a phone. It shares the
-                version row, same as the desktop footer. */}
-            <div className="flex items-center justify-between gap-2">
-              <VersionFooter />
-              <ThemeToggle compact />
-            </div>
+            <VersionFooter />
           </div>
         </SheetContent>
       </Sheet>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTheme } from "next-themes";
 import { OverviewSection } from "@repowise-dev/ui/overview";
 import {
   Select,
@@ -17,20 +18,37 @@ import {
 } from "@repowise-dev/ui/settings";
 import { Switch } from "@repowise-dev/ui/ui/switch";
 import { DEFAULT_WEEKEND_PRESET, WEEKEND_PRESETS } from "@repowise-dev/ui/stats";
+import {
+  CUSTOM_THEME_EVENT,
+  THEME_OPTIONS,
+  getCustomThemeBase,
+  getStoredCustomTheme,
+  setStoredCustomTheme,
+} from "@/components/layout/theme-provider";
 import { config, setChatDockHidden } from "@/lib/config";
 
 /** Reader-local display preferences for the stats surfaces. */
 export function DisplaySection() {
+  const { theme, setTheme } = useTheme();
+  const [selectedTheme, setSelectedTheme] = useState("light");
   const [weekend, setWeekend] = useState(DEFAULT_WEEKEND_PRESET.id);
   const [dockShown, setDockShown] = useState(true);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Read after mount so SSR and the first client render agree.
   useEffect(() => {
     setWeekend(config.getWeekend() || DEFAULT_WEEKEND_PRESET.id);
     setDockShown(!config.getChatDockHidden());
   }, []);
+
+  useEffect(() => {
+    const syncTheme = () => {
+      setSelectedTheme(getStoredCustomTheme() ?? (theme === "dark" ? "dark" : "light"));
+    };
+    syncTheme();
+    window.addEventListener(CUSTOM_THEME_EVENT, syncTheme);
+    return () => window.removeEventListener(CUSTOM_THEME_EVENT, syncTheme);
+  }, [theme]);
 
   useEffect(
     () => () => {
@@ -45,6 +63,18 @@ export function DisplaySection() {
     savedTimer.current = setTimeout(() => setSaveState("idle"), 2000);
   }
 
+  function handleThemeChange(v: string) {
+    setSelectedTheme(v);
+    if (v === "light" || v === "dark") {
+      setStoredCustomTheme(null);
+      setTheme(v);
+    } else {
+      setStoredCustomTheme(v);
+      setTheme(getCustomThemeBase(v));
+    }
+    markSaved();
+  }
+
   function handleChange(v: string) {
     setWeekend(v);
     config.setWeekend(v);
@@ -53,8 +83,6 @@ export function DisplaySection() {
 
   function handleDockChange(shown: boolean) {
     setDockShown(shown);
-    // Goes through the helper, not `config` directly: the dock is mounted on a
-    // different route and needs the event to notice.
     setChatDockHidden(!shown);
     markSaved();
   }
@@ -66,6 +94,25 @@ export function DisplaySection() {
       action={<SaveIndicator state={saveState} />}
     >
       <SettingsRows>
+        <SettingsRow label="Theme" hint="Choose the application colour theme.">
+          <Select value={selectedTheme} onValueChange={handleThemeChange}>
+            <SelectTrigger className="w-full sm:w-64">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent
+              style={{
+                background:
+                  "color-mix(in srgb, var(--color-bg-overlay) 35%, var(--color-bg-root) 65%)",
+              }}
+            >
+              {THEME_OPTIONS.map((option) => (
+                <SelectItem key={option.id} value={option.id}>
+                  {option.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </SettingsRow>
         <SettingsRow
           label="Weekend days"
           hint="Drives the “on weekends” share on the coding-rhythm heatmap."
