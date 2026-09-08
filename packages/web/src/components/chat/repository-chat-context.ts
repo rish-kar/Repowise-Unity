@@ -53,6 +53,7 @@ const ROUTES: Readonly<Record<string, RouteDefinition>> = {
   hotspots: { kind: "risk" },
   "dead-code": { kind: "risk" },
   "blast-radius": { kind: "risk" },
+  "change-analyser": { kind: "risk" },
   risk: { kind: "risk" },
   security: { kind: "security" },
   costs: { kind: "usage" },
